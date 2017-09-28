@@ -17,6 +17,17 @@
       Consolodated some code into matterPower object;
       Added nz as parameter to matterPower init; 
       Modified getCl, winKappa, winGalaxies for bias/amp params; ZK, 2017.08.27
+    Added plotRedshiftAppx; ZK, 2017.08.28
+    Added modelDNDZ; ZK, 2017.08.29
+    Modified winGalaxies and getCl to take modelDNDZ; ZK, 2017.08.30
+    Added byeBiasFit, getNormalizedDNDZbin; ZK, 2017.09.01
+    Added getWinKinterp, getNormalizedWinKbin to match DNDZ versions;
+      Reduced winKappa and winGalaxies parameter lists; ZK, 2017.09.06
+    Added bin option to winKappa; ZK, 2017.09.07
+    Added note on biases to winGalaxies; ZK, 2017.09.19
+    Modified winGalaxies to omit normalization if needed; ZK, 2017.09.27
+    Added z0 *= 1.0 to modelDNDZ to fix dividing by integer problem; 
+      ZK, 2017.09.28
 
 """
 
@@ -31,7 +42,7 @@ from scipy import polyfit,poly1d
 
 
 ################################################################################
-# the matterPower object
+# the matterPower class
 
 class matterPower:
   """
@@ -43,7 +54,7 @@ class matterPower:
       cosParams: the cosmological parameters for camb's set_cosmology
         Default: 
           cosParams = {
-            'H0' : 67.51,
+            'H0'    : 67.51,
             'ombh2' : 0.022,
             'omch2' : 0.119,
             'mnu'   : 0.06,
@@ -83,7 +94,7 @@ class matterPower:
     """
     # set cosmological parameters
     self.cosParams = {
-        'H0' : 67.51,
+        'H0'    : 67.51,
         'ombh2' : 0.022,
         'omch2' : 0.119,
         'mnu'   : 0.06,
@@ -103,8 +114,7 @@ class matterPower:
     """
       modify object's cosParams variable
       Inputs:
-        **cos_kwargs: dictionary of modifications
-          to be passed to set_cosmology
+        **cos_kwargs: dictionary of modifications to be passed to set_cosmology
     """
     self.cosParams.update(cos_kwargs)
 
@@ -212,7 +222,7 @@ class matterPower:
 
 def getDNDZ(binNum=1,BPZ=True):
   """
-    function to load dN/dz data points from file
+    function to load dN/dz(z) data points from file
     Note:
       data was digitized from figure 3 of Crocce et al, 2016
       data files should be in directory dNdz
@@ -224,7 +234,7 @@ def getDNDZ(binNum=1,BPZ=True):
         True: use BPZ result
         False: use TPZ result
     Returns:
-
+      z, dNdz(z)
   """
   myDir = 'dNdz/'
   if binNum == 1:
@@ -265,7 +275,7 @@ def getDNDZ(binNum=1,BPZ=True):
 def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
   """
     Purpose:
-      get interpolator for dNdz data points
+      get interpolator for dNdz(z) data points
     Inputs:
       binNum: integer in {1,2,3,4,5}.
         each corresponds to a redshift bin of width Delta.z=0.2:
@@ -279,7 +289,7 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
       nZvals: number of z values to use for interpolating sum of all curves 
         when binNum=0 (for sum of all) is selected
     Returns:
-      interpolation function dNdz
+      interpolation function dNdz(z)
   """
   if binNum==0:
     myZvals = np.linspace(zmin,zmax,nZvals)
@@ -295,6 +305,105 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
     dNdz = np.concatenate([[0.],dNdz,[0.] ])
 
   return interp1d(z,dNdz,assume_sorted=True,kind='slinear')#'quadratic')
+
+
+def modelDNDZ(z,z0):
+  """
+    Purpose:
+      Implement an analytic function that can be used to approximate galaxy 
+        distributions of future galaxy surveys
+    Inputs:
+      z:  the redshift(s) at which dN/dz is evaluated
+      z0: the control of the width and extent of the distribution
+        note: LSST science book uses z0 = 0.3
+    Returns:
+      magnitude of dN/dz at redshift z
+  """
+  # cast z0 as float
+  z0 *= 1.0
+  zRatio = z/z0
+  return 1/(2*z0) * (zRatio)**2 * np.exp(-1*zRatio)
+
+
+def modelDNDZbin(z,z0,zmax,nz,bNum,zmin=0.0):
+  """
+  Purpose:
+    create redshift distribution with vertical edges based on model dN/dz
+  Inputs:
+    z: redshift(s) at which to evaluate DNDZ function
+    z0: parameter controlling width of total dNdz dist.
+    zmax: maximum z to use when slicing total dNdz into sections
+    nz: number of evenly spaced sections to divide (0,zmax) into
+    bNum: which bin to return dN/dz for.  bin starting at z=0 is number 1,
+      bin ending at z=zmax is bin number nz
+      Must have 0 < bNum <= nz, 
+        or if bNum = 0, the sum of all bins will be returned 
+    zmin = 0.0: minimum z for bins
+  Returns:
+    Amplitude at redshift(s) z.  If within bin, will be model DNDZ.  
+      If outside bin, will be zero.
+  
+  """
+  binEdges = np.linspace(zmin,zmax,nz+1)
+  myDNDZ = modelDNDZ(z,z0)
+  if bNum != 0:
+    myDNDZ[np.where(z<binEdges[bNum-1])] = 0
+    myDNDZ[np.where(z>binEdges[bNum  ])] = 0
+  
+  return myDNDZ
+
+
+def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
+                      zmin=0.0,normPoints=1000):
+  """
+    Purpose:
+      return normalized dndz array
+    Note:
+      !!!!    WARNING    !!!!
+      unless the same points are used when evaluating dNdz that were used
+        when normalizing, the normalization may be off by up to around 2%!
+        (appears in this function as zArray=np.linspace(zmin,zmax,normpoints) )
+      I found this out when trying to use this to do dNdz weighted average
+        of galaxy bias and lensing amplitude
+    Inputs:
+      binNum: index indicating which redshift distribution to use
+        For individual bin use {1,2,3,4,5} with dndzMode=1,
+          or {1,2,...,nBins} with dndzMode=2
+        Default: 0, for sum of all bins
+      zs: the redshifts to calculate DNDZ at
+        Note that these are not the same ones used for the normalization
+      dndzMode: indicate which method to use to select dNdz curves
+        1: use observational DES-SV data from Crocce et al
+        2: use LSST model distribution, divided into rectagular bins (Default)
+      Parameters used only in dndzMode = 2:
+        z0: controls width of distribution
+        zmax: maximum redshift in range of bins
+        nBins: number of bins to divide range into
+      BPZ=True: controls which dndz curves to use in dndzMode = 1
+      zmin=0.0: minimum redshift in range of bins
+      normPoints=1000 # number of points in normalization integral appx.
+        Best if this is a multiple of nBins
+      
+  """
+  if dndzMode == 1:
+    zmax = 1.5 # hard coded to match domain in dndz files
+    rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax)
+  else: # dndzMode == 2:
+    #zmax = galaxyZmax
+    rawDNDZ = lambda z: modelDNDZbin(z,z0,zmax,nBins,binNum,zmin=zmin)
+  deltaZ = (zmax-zmin)/(normPoints-1) # -1 for fenceposts to intervals
+  zArray = np.linspace(zmin,zmax,normPoints) # includes one point at each end
+
+  dndzArray = rawDNDZ(zArray)
+  area = dndzArray.sum()*deltaZ # ignore endpoints since they're both zero anyway
+  normFac=1./area
+
+  # get normalized dNdz
+  myDNDZ = np.zeros(zs.size)
+  myIndices = np.where(np.logical_and(zs>=zmin,zs<=zmax))
+  myDNDZ[myIndices] = normFac*rawDNDZ(zs[myIndices])
+
+  return myDNDZ
 
 
 
@@ -330,86 +439,187 @@ def getBiasFit(deg=1):
   return poly1d(coefs)
 
 
-def winGalaxies(chistar,chis,zs,dchis,dzs,pars,dndzNum,biases=None,BPZ=True):
+def byeBiasFit():
+  """
+    Purpose:
+      polynomial fit to bias from simulations
+    Note:
+      Byeonghee Yu appears to have taken this formula from digitizing a plot
+        in Weinberg ea 2004 (fig. 9?)
+    Returns:
+      a function that can evaluate bias at redshift z, or redshifts z if an array is passed
+  """
+  return lambda z: 1+0.84*z
+
+
+def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
+                binNum=0,zmax=4,nBins=10,z0=0.3,doNorm=True):
   """
     window function for galaxy distribution
-    Inputs: (should have same parameter list as winKappa)
-      chistar: chi of CMB (really just a place holder here)
-      chis: array of chi values to be used along chi integral
-      zs: corresponding redshift value array
-      dchis:
-      dzs:
-      pars:
-      dndzNum: index indicating which redshift distribution to use
-      biases: array of galaxy biases corresponding to zs values
+    Inputs:
+      myPk: MatterPower object
+      biases: array of galaxy biases * matter biases (b*A)
+        corresponding to zs values
         default: all equal to 1
-      BPZ: flag to indicate BPZ or TPZ; True for BPZ
+      BPZ: flag to indicate BPZ or TPZ when dndzMode=1; True for BPZ
+      binNum: index indicating which redshift distribution to use
+        For individual bin use {1,2,3,4,5} with dndzMode=1,
+          or {1,2,...,nBins} with dndzMode=2
+        Default: 0, for sum of all bins
+      dndzMode: indicate which method to use to select dNdz curves
+        1: use observational DES-SV data from Crocce et al
+        2: use LSST model distribution, divided into rectagular bins (Default)
+      Parameters only used in dndzMode = 2:
+        zmax: max redshift of set of bins
+          Default: 4
+        nBins: number of bins to create
+          Default: 10
+        z0: controls width of full dNdz distribution
+        doNorm: set to true to normalize dN/dz.
+          Default: True
     Returns:
       array of W^galaxies values evaluated at input chi values
   """
+  # get redshift array, etc.
+  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+
   if biases is None:
     biases = np.ones(zs.size)
+  if dndzMode != 1 and dndzMode != 2:
+    print 'wrong dNdz mode selected.'
+    return 0
+
 
   # get dz/dchi as ratio of deltaz/deltachi
+  #  why not calculate as 1/H(z)?
   dzdchi = dzs/dchis
 
-  # get and normalize dN/dz
-  zmin=0.0; zmax=1.5; normPoints=1000 # number of points in integral appx.
-  deltaZ = (zmax-zmin)/(normPoints-1) # -1 for fenceposts to intervals
-  rawDNDZ = getDNDZinterp(binNum=dndzNum,BPZ=BPZ,zmin=zmin,zmax=zmax)
-  zArray = np.linspace(zmin,zmax,normPoints) # includes one point at each end
-  dndzArray = rawDNDZ(zArray)
-  area = dndzArray.sum()*deltaZ # ignore endpoints since they're both zero anyway
-  normFac=1./area
-
-  """
-  #bias: fiducial biases from Giannantonio et al 2016, table 2, gal-gal, real space
-  #  the index=0 bias is a place holder
-  #  for case where doing sum of all kernels, want weighted avg. to put there.
-  #gBias = (0,1.03,1.28,1.32,1.57,1.95)
-  biasFunc = getBiasFit()
-  biases = biasFunc(zs)
-  """
-
   # get normalized dNdz
-  myDNDZ = np.zeros(zs.size)
-  myIndices = np.where(np.logical_and(zs>=zmin,zs<=zmax))
-  myDNDZ[myIndices] = normFac*rawDNDZ(zs[myIndices])
+  if doNorm:
+    myDNDZ = getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,dndzMode=dndzMode,BPZ=BPZ)
+  else: # do not do normalization
+    zmin = 0.0
+    if dndzMode == 1:
+      zmax = 1.5 # hard coded to match domain in dndz files
+      rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax)
+    else: # dndzMode == 2:
+      rawDNDZ = lambda z: modelDNDZbin(z,z0,zmax,nBins,binNum,zmin=zmin)
+    myDNDZ = rawDNDZ(zs) 
 
-  #win = dzdchi*myDNDZ*gBias[dndzNum]
-  win = dzdchi*myDNDZ*biases
-  return win
+  return dzdchi*myDNDZ*biases
 
 
-def winKappa(chistar,chis,zs,dchis,dzs,pars,dndz,biases=None):
+def winKappa(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,**kwargs):
   """
     window function for CMB lensing convergence
-    Inputs: (should have same parameter list as winGalaxies)
-      chistar: chi of CMB
-      chis: array of chi values to be used along chi integral
-      zs: corresponding redshift value array
-      dchis:
-      dzs:
-      pars:
-      dndz: (just a placeholder)
+    Inputs:
+      myPk: MatterPower object
       biases: amplitude of lensing, array corresponding to zs values
         default: all equal to 1
+      binNum=0: index indicating which redshift distribution to use
+        For individual bin use {1,2,...,nBins}
+        Default: 0, for sum of all bins, including outside (zmin, zmax)
+      zmin,zmax: min,max redshift of set of bins 
+        Defaults: 0,4
+      nBins: number of bins to create
+        Default: 10
+      **kwargs: place holder so that winKappa and winGalaxies can have
+        same parameter list
     Returns:
       array of W^kappa values evaluated at input chi
   """
+  # get redshift array, etc.
+  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+
   if biases is None:
     biases = np.ones(zs.size)
 
-  #Get lensing window function (flat universe)
+  # Get lensing window function (flat universe)
   lightspeed = 2.99792458e5 # km/s
   myH0 = pars.H0/lightspeed # get H0 in Mpc^-1 units
   myOmegaM = pars.omegab+pars.omegac #baryonic+cdm
   myAs = 1/(1.+zs) #should have same indices as chis
-  win = chis*((chistar-chis)/(chistar*myAs))*biases
-  win *= (1.5*myOmegaM*myH0**2)
+  winK = chis*((chistar-chis)/(chistar*myAs))*biases
+  winK *= (1.5*myOmegaM*myH0**2)
 
-  return win
+  # slice out the bin of interest
+  binEdges = np.linspace(zmin,zmax,nBins+1)
+  if binNum != 0:
+    winK[np.where(zs<binEdges[binNum-1])] = 0
+    winK[np.where(zs>binEdges[binNum  ])] = 0
 
+  return winK
+
+
+def getWinKinterp(myPk,biases=None):
+  """
+    Purpose:
+      get interpolation function for winKappa(z)
+    Inputs:
+      myPk: MatterPower object
+      biases: amplitude of lensing, array corresponding to zs values
+        default: all equal to 1
+    Returns:
+      function for interpolating winKappa(z) result
+  """
+  winK = winKappa(myPk,biases=biases)
+  # insert (0,0) at beginning
+  zs = np.insert(myPk.zs,0,0)
+  winK = np.insert(winK,0,0)
+  return interp1d(zs,winK,assume_sorted=True,kind='slinear')
+
+
+def getNormalizedWinKbin(binNum,zs,zmax,nBins,myPk,biases=None,
+                      zmin=0.0,normPoints=1000):
+  """
+    Purpose:
+      return normalized WinK array for one particular bin
+    Note:
+      !!!!    WARNING    !!!!
+      unless the same points are used when evaluating WinK that were used
+        when normalizing, the normalization may be off by up to around 2%!
+        (appears in this function as zArray=np.linspace(zmin,zmax,normpoints) )
+      This function largely copied from getNormalizedDNDZbin and modelDNDZbin
+    Inputs:
+      binNum: index indicating which redshift distribution to use
+        {1,2,...,nBins}
+        Default: 0, for sum of all bins up to zmax
+      zs: the redshifts to calculate WinK at
+        Note that these are not the same ones used for the normalization
+      zmax: maximum redshift in range of bins
+      nBins: number of bins to divide range into
+      myPk: a MatterPower object
+      biases=None: lensing amplitudes indexed the same as redshift points
+        Default = None, indicating amplitude = 1 everywhere.
+      zmin=0.0: minimum redshift in range of bins
+      normPoints=1000 # number of points in normalization integral appx.
+        Best if this is a multiple of nBins
+      
+  """
+  rawWinK = getWinKinterp(myPk,biases=biases)
+  #normPoints = nBins*numNormFac #if I want to enforce this
+
+  # get z points for normalization
+  deltaZ = (zmax-zmin)/(normPoints-1) # -1 for fenceposts to intervals
+  zArray = np.linspace(zmin,zmax,normPoints) # includes one point at each end
+
+  # divide rawWinK into bins and select desired bin
+  binEdges = np.linspace(zmin,zmax,nBins+1)
+  myWinK = rawWinK(zArray)
+  if binNum != 0:
+    myWinK[np.where(zArray<binEdges[binNum-1])] = 0
+    myWinK[np.where(zArray>binEdges[binNum  ])] = 0
+  
+  # myWinK zero outside bin region (note that binNum=0 extends from zmin to zmax)
+  area = myWinK.sum()*deltaZ # treating zArray points as midpoints here
+  normFac=1./area
+
+  # get normalized WinK
+  normWinK = np.zeros(zs.size)
+  myIndices = np.where(np.logical_and(zs>=binEdges[binNum-1],zs<=binEdges[binNum]))
+  normWinK[myIndices] = normFac*rawWinK(zs[myIndices])
+
+  return normWinK
 
 
 
@@ -418,35 +628,50 @@ def winKappa(chistar,chis,zs,dchis,dzs,pars,dndz,biases=None):
 # the angular power spectrum
 
 
-def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,dndz1=0,dndz2=0):
+def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,
+          dndzMode1=1,dndzMode2=1,binNum1=0,binNum2=0,lmax=2500,
+          zmax=4,nBins=10,z0=0.3):
   """
     Purpose: get angular power spectrum
     Inputs:
       myPk: a matterPower object
-      biases1,biases2: array of galaxy bias or tomographic CMB lensing amplitudes 
-        at each redshift in myPk.zs, depending on which winfunc is selected
-        default: all equal to 1
+      biases1,biases2: array of matter amplitude (A) or 
+        galaxy bias * matter amplitude (bA) at each redshift in myPk.zs, 
+        depending on which winfunc is selected
+        default: None; indicates that all biases equal to 1
       winfunc1,winfunc2: the window functions
         should be winKappa or winGalaxies
-      dndz1,dndz2: index indicating which dndz function to use
-        integer in {0,1,2,3,4,5},  dndz1 for winfunc1, etc.
-        curves from fig.3 of Crocce et al 2016.
+      dndzMode1,dndzMode2: select which dNdz scheme to use for winfunc1,2
+      binNum1,binNum2: index indicating which bin to use
+        If dndzMode = 1:
+          integer in {0,1,2,3,4,5}
+          curves from fig.3 of Crocce et al 2016.
+        if dndzMode = 2:
+          integer in {0,1,...,nBins-1,nBins}
         Index=0 indicates sum of all other curves
+      lmax: highest ell to return.  (lowest will be 2)
+      Parameters only used in dndzMode = 2: (same for both winfuncs)
+        zmax: highest z to use creating bins
+        nBins: number of bins to use
+        z0: width of full galaxy distribution
+          Default: 0.3 (from LSST science book)
     Returns: 
       l,  the ell values (same length as Cl array)
       Cl, the power spectrum array
-
-
   """
+
   # confirm inputs
   def wincheck(winfunc,num):
     if winfunc == winKappa:
-      print 'window ',num,': kappa'
+      if num == 1:
+        print 'window ',num,': kappa ',binNum1
+      else:
+        print 'window ',num,': kappa ',binNum2
     elif winfunc == winGalaxies:
       if num == 1:
-        print 'window ',num,': galaxies ',dndz1
+        print 'window ',num,': galaxies ',binNum1
       else:
-        print 'window ',num,': galaxies ',dndz2
+        print 'window ',num,': galaxies ',binNum2
     else:
       print 'error with input'
       return 0
@@ -455,21 +680,18 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,dnd
   if wincheck(winfunc1,1)==0: return 0,0
   if wincheck(winfunc2,2)==0: return 0,0
   
-  #if gBias is None:
-  #  gBias = np.ones(myPk.nz-2) # -2 due to excision of end points
-  #if aLens is None:
-  #  aLens = np.ones(myPk.nz-2)
-
-
   # get matter power spectrum P_k^delta
   PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
 
   # get window functions
-  win1=winfunc1(chistar,chis,zs,dchis,dzs,pars,dndz1,biases=biases1)
-  win2=winfunc2(chistar,chis,zs,dchis,dzs,pars,dndz2,biases=biases2)
+  # note that winKappa will ignore extra keywords due to use of **kwargs 
+  win1=winfunc1(myPk,biases=biases1,z0=z0,dndzMode=dndzMode1,binNum=binNum1,
+                zmax=zmax,nBins=nBins)
+  win2=winfunc2(myPk,biases=biases2,z0=z0,dndzMode=dndzMode2,binNum=binNum2,
+                zmax=zmax,nBins=nBins)
 
   #Do integral over chi
-  ls = np.arange(2,2500+1, dtype=np.float64)
+  ls = np.arange(2,lmax+1, dtype=np.float64)
   cl_kappa=np.zeros(ls.shape)
   w = np.ones(chis.shape) #this is just used to set to zero k values out of range of interpolation
   for i, l in enumerate(ls):
@@ -554,6 +776,36 @@ def plotDNDZsum(zmin=0.0,zmax=1.5):
     plt.show()
 
 
+def plotRedshiftAppx(myPk,dndzMode=1,nBins=5):
+  """
+    for plotting the equivalent redshift bins in the approximation to the integral
+      over distance from here to last scattering, compared to g,k kernels
+    Inputs:
+      myPk: matterpower object; contains redshift points
+      dndzMode: which type of dndz to plot
+      nBins: number of bins to use
+        use 5 for dndzMode = 1 (default)
+
+  """
+  # get matter power spectrum P_k^delta
+  #PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+  zs = myPk.zs
+
+  # get and plot window functions
+  winK  = winKappa(myPk)
+  plt.plot(zs,winK)
+  for binNum in range(1,nBins+1):
+    winG = winGalaxies(myPk,binNum=binNum,dndzMode=dndzMode)
+    plt.plot(zs,winG)
+
+
+  # loop over zs
+  for zbin in zs:
+    plt.axvline(zbin)
+  
+  plt.show()
+
+
 def plotCl(ls,Cl):
   """
     plot the angular power spectrum
@@ -579,24 +831,44 @@ def plotCl(ls,Cl):
   plt.show()
 
 
-def plotKG(myPk,biasesK=None,biasesG=None,DNDZnum=0,lmax=2500):
+def plotKG(myPk,biasesK=None,biasesG=None,lmax=2500,
+           dndzMode=1,binNum=0,zmax=4,nBins=10,z0=0.3):
   """
   Purpose:
     to plot each C_l for kappa, galaxy combinations
     Uses just one dNdz for all C_l
   Inputs:
     myPk: a matterPower object
-    biasesK, array of galaxy bias
-    biasesG: array of lensing amplitudes
+    biasesK: array of lensing amplitudes
       must be same length as myPk.zs
-    DNDZnum: index in {0,1,2,3,4,5} defining which dNdz to use
-      Default: 0 for sum of all others
+    biasesG, array of galaxy biases
+      must be same length as myPk.zs
+    lmax: highest ell to plot
+    dndzMode: which mode to use for creating dNdz functions
+      1: uses DES-SV bins from Crocce et al
+      2: uses LSST model dNdz from LSST science book
+      Default: 1
+    binNum: 
+      index defining which bin to use
+      if dndzMode is 1: binNum in {1,2,3,4,5}
+      if dndzMode is 2: binNum in {1,2,...,nBins-1,nBins}
+      Default: 0 for sum of all bins
+    Parameters only used in dndzMode =2:
+      zmax: highest redshift to include in bins
+      nBins: number of bins to divide 0<z<zmax into
+      z0: controls the width of the total galaxy distribution
 
   """
   ls1, Cl1 = getCl(myPk,biases1=biasesK,biases2=biasesK,winfunc1=winKappa,   winfunc2=winKappa)
-  ls2, Cl2 = getCl(myPk,biases1=biasesK,biases2=biasesG,winfunc1=winKappa,   winfunc2=winGalaxies,              dndz2=DNDZnum)
-  #ls3, Cl3 = getCl(myPk,biases1=biasesG,biases2=biasesK,winfunc1=winGalaxies,winfunc2=winKappa,   dndz1=DNDZnum)
-  ls4, Cl4 = getCl(myPk,biases1=biasesG,biases2=biasesG,winfunc1=winGalaxies,winfunc2=winGalaxies,dndz1=DNDZnum,dndz2=DNDZnum)
+  ls2, Cl2 = getCl(myPk,biases1=biasesK,biases2=biasesG,winfunc1=winKappa,   winfunc2=winGalaxies, 
+                             dndzMode2=dndzMode,                 binNum2=binNum,
+                   zmax=zmax,nBins=nBins,z0=z0)
+  #ls3, Cl3 = getCl(myPk,biases1=biasesG,biases2=biasesK,winfunc1=winGalaxies,winfunc2=winKappa,   
+  #        dndzMode1=dndzMode,                   binNum1=binNnum,
+  #                 zmax=zmax,nBins=nBins,z0=z0)
+  ls4, Cl4 = getCl(myPk,biases1=biasesG,biases2=biasesG,winfunc1=winGalaxies,winfunc2=winGalaxies,
+          dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=binNum,binNum2=binNum,
+                   zmax=zmax,nBins=nBins,z0=z0)  
 
   p1=plt.semilogy(ls1,Cl1,label='$\kappa\kappa$')
   p2=plt.semilogy(ls2,Cl2,label='$\kappa g$')
@@ -624,7 +896,7 @@ def plotGG(myPk,biases1=None,biases2=None,lmax=2000):
   for i in range(1,6):
     for j in range(i,6):
       print 'starting g_',i,' g_',j
-      ls,Cl = getCl(myPk,biases1=biases1,biases2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,dndz1=i,dndz2=j)
+      ls,Cl = getCl(myPk,biases1=biases1,biases2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=i,binNum2=j)
       plt.semilogy(ls,Cl,label='g_'+str(i)+', g_'+str(j))
   plt.xlim(0,lmax)
   plt.xlabel(r'$\ell$')
@@ -636,20 +908,67 @@ def plotGG(myPk,biases1=None,biases2=None,lmax=2000):
 
 def plotGGsum(myPk,biases=None):
   """
+  Note: this is basically included in plotKG
+  Note: does not have option for getCl to use anything but dndzMode=1
   plot Cl^gg from sum of al dNdz
   Inputs:
     myPk: a matterPower object
     biases: array of galaxy biases
       must be same length as myPk.zs
   """
-  ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,dndz1=0,dndz2=0)
+  ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0)
   plt.semilogy(ls,Cl)
   plt.title('C_l^gg for sum of all dNdz curves')
   plt.show()
   
 
+def plotModelDNDZ(z0=0.3,zmax=4):
+  """
+  plot the DNDZ model
+  Inputs:
+    z0: the width control
+      Default: 0.3 (used by LSST sci.book)
+    zmax: maximum z to plot
+
+  """
+  zs = np.linspace(0,zmax,100)
+  plt.plot(zs,modelDNDZ(zs,z0))
+  plt.show()
 
 
+def plotModelDNDZbins(z0=0.3,zmax=4,nBins=10):
+  """
+  plot model DNDZ cut up into bins
+  Inputs:
+    z0: controls width of total dist.
+    zmax: max z for dividing up bins
+    nBins: number of bins to divide up
+  """
+  zs = np.linspace(0,zmax,100)
+  for bNum in range(1,nBins+1):
+    myDNDZ=modelDNDZbin(zs,z0,zmax,nBins,bNum)
+    plt.plot(zs,myDNDZ)
+  plt.show()
+
+
+def plotWinKbins(myPk,zmax=4,nBins=10):
+  """
+  plot winKappa cut up into normalized bins
+  Inputs:
+    myPk: a MatterPower object
+    zmax: max z for dividing up bins
+    nBins: number of bins to divide up
+  """
+  numPoints = 1000
+  zmin = 0.0
+  zs = np.linspace(0,zmax,numPoints)
+  for binNum in range(1,nBins+1):
+    winKbin = getNormalizedWinKbin(binNum,zs,zmax,nBins,myPk,biases=None,
+                      zmin=zmin,normPoints=numPoints)
+    plt.plot(zs,winKbin)
+  plt.show()
+
+  
 
 
 ################################################################################
@@ -684,7 +1003,7 @@ def test(doPlot = True):
 
   # getCl for other parameter values; use dNdz 0
   #print 'testing with plotKG'
-  #plotKG(myPk,DNDZnum=0,lmax=2000)
+  #plotKG(myPk,binNum=0,lmax=2000)
 
   # getCl for gg for all g
   #print 'testing with plotGG and plotGGsum'
@@ -694,7 +1013,7 @@ def test(doPlot = True):
   # test getCl using different kwargs values
   # the default parameters
   """cosParams = {
-      'H0' : 67.51,
+      'H0'    : 67.51,
       'ombh2' : 0.022,
       'omch2' : 0.119,
       'mnu'   : 0.06,
@@ -702,7 +1021,7 @@ def test(doPlot = True):
       'tau'   : 0.06  }"""
   # modified parameters for testing
   """cosParams = {
-      'H0' : 42, #this one changed
+      'H0'    : 42, #this one changed
       'ombh2' : 0.022,
       'omch2' : 0.119,
       'mnu'   : 0.06,
@@ -711,20 +1030,32 @@ def test(doPlot = True):
   print 'creating myPk2 (H_0=42)... '
   myPk2 = matterPower(**cosParams)
   print 'testing plotKG with different params.'
-  plotKG(myPk2,DNDZnum=0,lmax=2000)
+  plotKG(myPk2,binNum=0,lmax=2000)
   """
   
   # test matterPower with more points
-  myNz = 1000
+  myNz = 10000 # default value is 1000
   print 'creating myPk3 (nz=',myNz,')... '
   myPk3 = matterPower(nz=myNz)
-  plotKG(myPk3,DNDZnum=0,lmax=2000)
+  plotKG(myPk3,binNum=0,lmax=2000)
 
   
   # test with different bias model
   biasFunc = getBiasFit()
   biases = biasFunc(myPk3.zs)
-  plotKG(myPk3,biasesG=biases,DNDZnum=0,lmax=2000)
+  plotKG(myPk3,biasesG=biases,binNum=0,lmax=2000)
+
+
+  # check redshift points compared to kernels
+  myNz = 100 # default value is 1000
+  print 'creating myPk4 (nz=',myNz,')... '
+  myPk4 = matterPower(nz=myNz)
+  plotRedshiftAppx(myPk4,dndzMode=2,nBins=10)
+
+  # check model DNDZ, winK bins
+  #plotModelDNDZ()
+  #plotWinKbins(myPk)
+
 
 if __name__=='__main__':
   test()
