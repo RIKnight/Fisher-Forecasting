@@ -22,6 +22,16 @@
       ZK, 2017.09.20
     Fixed indexing error in covar creation; ZK, 2017.09.21
     Fixed indenting error in crossCls creation; ZK, 2017.09.22
+    Modiefied so all d/dA are 0 for testing; ZK, 2017.09.29
+    Added noAs condition to plotting function for testing; ZK, 2017.10.01
+    Added noAs parameter to FisherMatrix init and plotSigmasByNBins;
+      ZK, 2017.10.02
+    Fixed big problem in dClVecs creation involving missing delta 
+      functions; ZK, 2017.10.04
+    Fixed indexing problem (bin vs map) in creation of crossClbins;
+      ZK, 2017.10.04
+    Note: Lloyd thought I should get this working in 2 weeks. 
+      It took 6 weeks for me to do it.  ugh.  ZK, 2017.10.05
 
 """
 
@@ -58,7 +68,8 @@ class FisherMatrix:
   """
 
 
-  def __init__(self,nz=1000,lmax=2000,zmax=16,nBins=10,z0=1.5,**cos_kwargs):
+  def __init__(self,nz=1000,lmax=2000,zmax=16,nBins=10,z0=1.5,
+               noAs=False, **cos_kwargs):
     """
     
       Inputs:
@@ -69,6 +80,9 @@ class FisherMatrix:
         zmax: maximum z to use in binning for A_i, b_i parameters
         nBins: number of bins to use for A_i, b_i parameters
         z0: controls the width of the model galaxy distribution
+        noAs: set to True if dCl/dA are all zero (As are fixed)
+          This will just set the derivatives to zero, but rows and columns
+          in Fij will still be there, but all zero.
         **cos_kwargs: the cosmological parameters for camb's set_cosmology
 
     """
@@ -105,32 +119,39 @@ class FisherMatrix:
     
     # get matter power object
     print 'creating matter power spectrum object...'
-    myPk = cp.matterPower(nz=nz)  #don't need to save as self.myPk...?
+    myPk = cp.matterPower(nz=nz,**self.cosParams)  #don't need to save as self.myPk...?
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
 
 
 ################################################################################
     # create fiducial galxy bias and lensing amplitude as one parameter per bin
-    # match zs, dzs to what normalization routine does
+    # to match zs, dzs exactly to what normalization routine does, 
+    #   use normPoints = 0 (no added points)
     zmin = self.zmin
-    normPoints = 1000
-    zArray = np.linspace(zmin,zmax,normPoints)
-    deltaZ = (zmax-zmin)/(normPoints-1)
+    normPoints = 0
+    verbose = False
+
+    # redshift points for entire range zmin to zmax:
+    myNormPoints = nBins*1000
+    zArray = np.linspace(zmin,zmax,myNormPoints+1)
+    deltaZ = (zmax-zmin)/(myNormPoints)
 
     bOfZfit = cp.byeBiasFit()  #Byeonghee's bias function
     bOfZ = bOfZfit(zArray)
-    AOfZ = np.ones(normPoints) #fiducially all ones
+    AOfZ = np.ones(myNormPoints+1) #fiducially all ones
     binBs = np.empty(nBins)
     binAs = np.empty(nBins)
     for binNum in range(nBins):
       # get weighted average over dNdz as integral of product with normalized dndz
-      normalizedDNDZ = cp.getNormalizedDNDZbin(binNum+1,zArray,z0,zmax,nBins,dndzMode=dndzMode,
-                                            zmin=zmin,normPoints=normPoints)
-      binBs[binNum] = np.sum(normalizedDNDZ*bOfZ)*deltaZ
+      normalizedDNDZ = cp.getNormalizedDNDZbin(binNum+1,zArray,z0,zmax,nBins,
+                          dndzMode=dndzMode,zmin=zmin,normPoints=normPoints,verbose=verbose)
+      binBs[binNum] = np.sum(normalizedDNDZ*bOfZ)*deltaZ 
       # get weighted average over dWdz (lensing kernel)
-      normalizedWinK = cp.getNormalizedWinKbin(binNum+1,zArray,zmax,nBins,myPk,
-                                               zmin=zmin,normPoints=normPoints)
+      normalizedWinK = cp.getNormalizedWinKbin(myPk,binNum+1,zArray,zmin=zmin,
+                          zmax=zmax,nBins=nBins,normPoints=normPoints,verbose=verbose)
       binAs[binNum] = np.sum(normalizedWinK*AOfZ)*deltaZ
+    self.binBs = binBs
+    self.binAs = binAs
     print 'fiducial bs: ',binBs
     print 'fiducial As: ',binAs
 
@@ -148,7 +169,7 @@ class FisherMatrix:
     for map1 in range(nMaps):
       if map1==0:
         winfunc1 = cp.winKappa
-        biases1=None # kludge as long as As are all 1
+        biases1=np.ones(zs.size)*binAs[map1-1]
       else:
         winfunc1 = cp.winGalaxies
         biases1=np.ones(zs.size)*binBs[map1-1]*binAs[map1-1]  # -1 since nMaps=nBins+1
@@ -156,7 +177,7 @@ class FisherMatrix:
         print 'starting angular cross power spectrum ',map1,', ',map2,'... '
         if map2==0:
           winfunc2 = cp.winKappa
-          biases2=None # kludge as long as As are all 1
+          biases2=np.ones(zs.size)*binAs[map2-1]
         else:
           winfunc2 = cp.winGalaxies
           biases2=np.ones(zs.size)*binBs[map2-1]*binAs[map2-1]  # -1 since nMaps=nBins+1
@@ -170,40 +191,42 @@ class FisherMatrix:
           self.crossCls[map2,map1] = Cls #symmetric
     self.ells = ells
 
-    # now get crossClbins
+    # divide K,G into bins and get crossClbins
     self.crossClBinsKK = np.zeros((nBins,nBins,lmax-1))
     self.crossClBinsKG = np.zeros((nBins,nBins,lmax-1))
     self.crossClBinsGG = np.zeros((nBins,nBins,lmax-1))
 
     # if tophatBins, only the diagonals will be filled
+    # note: cp.getCl has a +1 offset to bin numbers, 
+    #   since bin 0 indicates sum of all bins
     print 'starting cross power with binned kappa... '
-    for map1 in range(nBins):
-      for map2 in range(map1,nBins):
-        if map1==map2 or not tophatBins:
-          print 'starting angular cross power spectrum ',map1,', ',map2,'... '
-          biasesKi = np.ones(zs.size)*binAs[map1]
-          biasesGi = np.ones(zs.size)*binBs[map2]*binAs[map2]
+    for bin1 in range(nBins):
+      for bin2 in range(bin1,nBins):
+        if bin1==bin2 or not tophatBins:
+          print 'starting angular cross power spectrum ',bin1,', ',bin2,'... '
+          biasesKi = np.ones(zs.size)*binAs[bin1]
+          biasesGi = np.ones(zs.size)*binBs[bin2]*binAs[bin2]
           # kk
           ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesKi,
               winfunc1=cp.winKappa,winfunc2=cp.winKappa,
-              binNum1=map1,binNum2=map2,
+              binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
-          self.crossClBinsKK[map1,map2] = Cls
-          self.crossClBinsKK[map2,map1] = Cls #symmetric
+          self.crossClBinsKK[bin1,bin2] = Cls
+          self.crossClBinsKK[bin2,bin1] = Cls #symmetric
           # kg
           ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesGi,
               winfunc1=cp.winKappa,winfunc2=cp.winGalaxies,
-              dndzMode2=dndzMode,binNum1=map1,binNum2=map2,
+              dndzMode2=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
-          self.crossClBinsKG[map1,map2] = Cls
-          self.crossClBinsKG[map2,map1] = Cls #symmetric
+          self.crossClBinsKG[bin1,bin2] = Cls
+          self.crossClBinsKG[bin2,bin1] = Cls #symmetric
           # gg
           ells,Cls = cp.getCl(myPk,biases1=biasesGi,biases2=biasesGi,
               winfunc1=cp.winGalaxies,winfunc2=cp.winGalaxies,
-              dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=map1,binNum2=map2,
+              dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
-          self.crossClBinsGG[map1,map2] = Cls
-          self.crossClBinsGG[map2,map1] = Cls #symmetric
+          self.crossClBinsGG[bin1,bin2] = Cls
+          self.crossClBinsGG[bin2,bin1] = Cls #symmetric
 
 
 
@@ -264,37 +287,54 @@ class FisherMatrix:
     for map1 in range(nMaps):
       print 'starting derivative set ',map1+1,' of ',nMaps,'... '
       for map2 in range(map1,nMaps):
-        #mapIdx  = map1*nMaps+map2  # mapIdx = map index
-        #mapIdxT = map2*nMaps+map1  # index for transpose C_l^kg <-> C_l^gk
-        mapIdx  = map1*nMaps+map2 -map1*(map1+1)/2  # mapIdx = map index
-        #mapIdxT = map2*nMaps+map1 -map2*(map2+1)/2  # index for transpose C_l^kg <-> C_l^gk
+        mapIdx  = map1*nMaps+map2 -map1*(map1+1)/2  
+                                   # mapIdx = map index
         for pIdx in range(nBins):  # pIdx = parameter index
-          Ai = pIdx
-          bi = nBins+pIdx          # Bs to be after the As
+          Ai   = pIdx
+          bi   = nBins+pIdx        # Bs to be after the As
 
           if map1 == 0: #kappa
             if map2 == 0:          #kk
               # this section assumes Sum_i^{nBins+1} W^{k_i} = W^k (completeness)
-              self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKK[pIdx,pIdx]
-              self.dClVecs[mapIdx, bi] = Clzeros 
+              if noAs:
+                self.dClVecs[  mapIdx, Ai] = Clzeros
+              else:
+                self.dClVecs[  mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKK[pIdx,pIdx]
+              self.dClVecs[    mapIdx, bi] = Clzeros 
+
             else:                  #kg,gk
               # this section assumes no bin overlap (update later)
-              self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
-              self.dClVecs[mapIdx, bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
-              # fill in transpose via symmetry
-              #self.dClVecs[mapIdxT,Ai] = self.dClVecs[mapIdx,Ai]
-              #self.dClVecs[mapIdxT,bi] = self.dClVecs[mapIdx,bi]
+              if pIdx+1 == map2: # +1 since 1 more map than bin
+                if noAs:
+                  self.dClVecs[mapIdx, Ai] = Clzeros
+                else:
+                  self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+              else: # parameter index does not match bin index
+                self.dClVecs[  mapIdx, Ai] = Clzeros
+                self.dClVecs[  mapIdx, bi] = Clzeros
+
           else: #galaxies          #gg
-            if map1 == map2:
-              self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
-              self.dClVecs[mapIdx, bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
-            else:
-              # this section assumes no bin overlap (update later)
-              self.dClVecs[mapIdx ,Ai] = Clzeros 
-              self.dClVecs[mapIdx ,bi] = Clzeros 
-              #self.dClVecs[mapIdxT,Ai] = Clzeros 
-              #self.dClVecs[mapIdxT,bi] = Clzeros 
+            if pIdx+1 == map2: # +1 since 1 more map than bin
+              if map1 == map2:
+                if noAs:
+                  self.dClVecs[mapIdx, Ai] = Clzeros
+                else:
+                  self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+              else:
+                # this section assumes no bin overlap (update later)
+                self.dClVecs[  mapIdx ,Ai] = Clzeros 
+                self.dClVecs[  mapIdx ,bi] = Clzeros 
+            else: # parameter index does not match bin index
+              self.dClVecs[    mapIdx, Ai] = Clzeros
+              self.dClVecs[    mapIdx, bi] = Clzeros
+            
+
        
+
+
+
     # this bit was from when A was A_lens, not A_matter
     """
     print 'starting creation of C_l derivatives... '
@@ -354,6 +394,7 @@ class FisherMatrix:
           myCov = self.invCov[:,:,ell]
           #print
           fij = np.dot(dClVec_i[:,ell],np.dot(myCov,dClVec_j[:,ell]))
+          
 
           #test = np.where(fij>1e14)
           #print 'fij>1e14 at ',test
@@ -402,15 +443,23 @@ def plotSigmas(FInv):
   # hold off on finishing this one...
 
 
-def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5):
+def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,noAs=False):
   """
     plot several sigmas for various values of nBins at one zmax
+    Inputs:
+      nz:
+      lmax:
+      zmax:
+      z0:
+      noAs: set to True if dCl/dA are all zero (As are fixed)
 
   """
   # NOTE: when running this with nBinsVals = (4,8,12,16,20), when inverting the final 40x40 matrix, the computer (which had 8Gb RAM) became memory-bound, with around 7.5Gb for python and crawling on all processes. I aborted it.
-  nBinsVals = (4,8,12,16)#,20)
+  nBinsVals = (2,4,8,16)
+  #nBinsVals = (4,8,12,16)#,20)
   #nBinsVals = (3,6,9,12)#,15)
-  labels = ('4 bins','8 bins','12 bins','16 bins')
+  labels = ('2 bins','4 bins','8 bins','16 bins')
+  #labels = ('4 bins','8 bins','12 bins','16 bins')
   #labels = ('3 bins','6 bins','9 bins','12 bins')
   #nBinsVals = (5,10,15)
   nnBins = 4#5 #number of nBins values (just a label, really)
@@ -420,11 +469,17 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5):
   # get Fisher matrix objects and do plots
   fig, (ax1,ax2) = plt.subplots(1,2, figsize=(12,6))
   for nBinsIndex,nBinsNum in enumerate(nBinsVals):
-    print 'starting Fisher Matrix ',nBinsIndex+1,' of ',nnBins, ', with nBins=',nBinsNum
-    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zmax,nBins=nBinsNum,z0=z0)
+    print '\n starting Fisher Matrix ',nBinsIndex+1,' of ',nnBins, ', with nBins=',nBinsNum
+    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zmax,nBins=nBinsNum,z0=z0,noAs=noAs)
 
     print 'inverting Fij ',nBinsIndex+1,' of ',nnBins
-    FInv = np.linalg.inv(Fobj.Fij)
+    if noAs:
+      upperQIndices = np.arange(Fobj.nBins)
+      myFij = Fobj.Fij
+      myFij[upperQIndices,upperQIndices] = 1
+      FInv = np.linalg.inv(myFij)
+    else:
+      FInv = np.linalg.inv(Fobj.Fij)
 
     # check eigenvalues
     w,v = np.linalg.eigh(FInv)
@@ -435,9 +490,10 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5):
     #print 'binCenters: ',binCenters
     diags = np.diag(FInv)
     sigmas = np.sqrt(diags)
+    print 'sigmas: ',sigmas
     nBins = nBinsVals[nBinsIndex]
-    As = sigmas[0:nBins]
-    Bs = sigmas[nBins:2*nBins]
+    As = sigmas[:nBins]
+    Bs = sigmas[nBins:]
     #print 'As: ',As,', Bs: ',Bs,'\n'
     ax1.plot(binCenters,As,label=labels[nBinsIndex])
     ax2.plot(binCenters,Bs,label=labels[nBinsIndex])
@@ -458,6 +514,71 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5):
   plt.show()
     
   
+def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,noAs=False):
+  """
+    plot several sigmas for various values of nBins at one zmax
+    Inputs:
+      nz:
+      lmax:
+      nBins: total number of bins to use
+      z0:
+      noAs: set to True if dCl/dA are all zero (As are fixed)
+
+  """
+
+  zMaxVals = (4,8,16,20)
+  labels = ('zMax = 4','zMax = 8','zMax = 16','zMax = 20')
+  nnZmax = 4  #number of nBins values (just a label, really)
+
+  # to collect eigenvalues
+  eigs = []
+  # get Fisher matrix objects and do plots
+  fig, (ax1,ax2) = plt.subplots(1,2, figsize=(12,6))
+  for zMaxIndex,zMaxNum in enumerate(zMaxVals):
+    print '\n starting Fisher Matrix ',zMaxIndex+1,' of ',nnZmax, ', with zMax=',zMaxNum
+    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zMaxNum,nBins=nBins,z0=z0,noAs=noAs)
+
+    print 'inverting Fij ',zMaxIndex+1,' of ',nnZmax
+    if noAs:
+      upperQIndices = np.arange(Fobj.nBins)
+      myFij = Fobj.Fij
+      myFij[upperQIndices,upperQIndices] = 1
+      FInv = np.linalg.inv(myFij)
+    else:
+      FInv = np.linalg.inv(Fobj.Fij)
+
+    # check eigenvalues
+    w,v = np.linalg.eigh(FInv)
+    print 'eigenvalues: ',w
+    eigs = np.append(eigs,w)
+
+    binCenters = Fobj.getBinCenters()
+    #print 'binCenters: ',binCenters
+    diags = np.diag(FInv)
+    sigmas = np.sqrt(diags)
+    print 'sigmas: ',sigmas
+    #nBins = nBinsVals[nBinsIndex]
+    As = sigmas[:nBins]
+    Bs = sigmas[nBins:]
+    #print 'As: ',As,', Bs: ',Bs,'\n'
+    ax1.plot(binCenters,As,label=labels[zMaxIndex])
+    ax2.plot(binCenters,Bs,label=labels[zMaxIndex])
+
+  print 'eigenvalues of all inverses of Fisher matrices: ',eigs
+
+  ax1.set_title(r'matter amplitudes $A_i$')
+  ax2.set_title(r'galaxy biases $b_i$')
+  ax1.set_xlabel('redshift',fontsize=15)
+  ax2.set_xlabel('redshift',fontsize=15)
+  ax1.set_ylabel(r'$\sigma_A$',fontsize=20)
+  ax2.set_ylabel(r'$\sigma_b$',fontsize=20)
+  ax1.set_xlim([0,20])
+  ax2.set_xlim([0,20])
+  #ax1.set_ylim([0,1e-3])
+  #ax2.set_ylim([0,1e-3])
+  ax2.legend(loc='upper left')
+  plt.show()
+    
 
 ################################################################################
 # testing code
