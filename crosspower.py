@@ -36,6 +36,8 @@
       non-normalized plotting ability; ZK, 2017.10.02
     Modified normBin to interpret redshift points as bin centers rather than
       edges; ZK, 2017.10.04
+    Added overlapping redshift bin functionality (dndzMode1); ZK, 2017.10.06
+    Added bin smoothing with Gaussian (dndzMode2); ZK, 2017.10.10
 
 """
 
@@ -315,6 +317,40 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
   return interp1d(z,dNdz,assume_sorted=True,kind='slinear')#'quadratic')
 
 
+def getDNDZratio(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
+  """
+    Purpose:
+      get interpolator for ratio of (dNdz)_i/(dNdz)_tot data points
+    Inputs:
+      binNum: integer in {1,2,3,4,5}.
+        each corresponds to a redshift bin of width Delta.z=0.2:
+        0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0, 1.0-1.2, 1.2-1.4;
+      BPZ: selects which photo-z result to use
+        True: use BPZ result
+        False: use TPZ result
+      zmin,zmax: the lowest,highest redshift points in the interpolation
+      nZvals: number of z values to use for interpolating sum of all curves 
+        when binNum=0 (for sum of all) is selected
+    Returns:
+      interpolation function dNdz(z)
+  """
+  numeratorInterp = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,nZvals=nZvals)
+  denominatorInterp = getDNDZinterp(binNum=0,BPZ=BPZ,zmin=zmin,zmax=zmax,nZvals=nZvals)
+
+  myZvals = np.linspace(zmin,zmax,nZvals)
+  numVals = numeratorInterp(myZvals)
+  denVals = denominatorInterp(myZvals)
+
+  # what if denom goes to zero?  does it ever?  prob. only at endpoints zmin, zmax
+  #print 'denVals == 0 at: ',np.where(denVals == 0)
+  # kludge endpoints
+  denVals[0] = denVals[1]
+  denVals[-1] = denVals[-2]
+  ratioVals = numVals/denVals
+
+  return interp1d(myZvals,ratioVals,assume_sorted=True,kind='slinear')#'quadratic')
+
+
 def modelDNDZ(z,z0):
   """
     Purpose:
@@ -333,7 +369,7 @@ def modelDNDZ(z,z0):
   return 1/(2*z0) * (zRatio)**2 * np.exp(-1*zRatio)
 
 
-def modelDNDZbin(z,z0,zmax,nz,bNum,zmin=0.0):
+def modelDNDZbin(z,z0,zmax,nz,binNum,zmin=0.0,binSmooth=0):
   """
   Purpose:
     create redshift distribution with vertical edges based on model dN/dz
@@ -342,11 +378,13 @@ def modelDNDZbin(z,z0,zmax,nz,bNum,zmin=0.0):
     z0: parameter controlling width of total dNdz dist.
     zmax: maximum z to use when slicing total dNdz into sections
     nz: number of evenly spaced sections to divide (0,zmax) into
-    bNum: which bin to return dN/dz for.  bin starting at z=0 is number 1,
+    binNum: which bin to return dN/dz for.  bin starting at z=0 is number 1,
       bin ending at z=zmax is bin number nz
       Must have 0 < bNum <= nz, 
         or if bNum = 0, the sum of all bins will be returned 
     zmin = 0.0: minimum z for bins
+    binSmooth: parameter to control smoothing of tophat-stamped bins
+      Default: 0 (no smoothing)
   Returns:
     Amplitude at redshift(s) z.  If within bin, will be model DNDZ.  
       If outside bin, will be zero.
@@ -354,10 +392,12 @@ def modelDNDZbin(z,z0,zmax,nz,bNum,zmin=0.0):
   """
   binEdges = np.linspace(zmin,zmax,nz+1)
   myDNDZ = modelDNDZ(z,z0)
-  if bNum != 0:
-    myDNDZ[np.where(z<binEdges[bNum-1])] = 0
-    myDNDZ[np.where(z>binEdges[bNum  ])] = 0
+  if binNum != 0:
+    myDNDZ[np.where(z< binEdges[binNum-1])] = 0
+    myDNDZ[np.where(z>=binEdges[binNum  ])] = 0
   
+  # do smoothing here
+
   return myDNDZ
 
 
@@ -435,7 +475,7 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
 
 
 def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
-                      zmin=0.0,normPoints=1000,verbose=False):
+                      zmin=0.0,normPoints=1000,binSmooth=0,verbose=False):
   """
     Purpose:
       return normalized dndz array
@@ -443,11 +483,12 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
       Left bin edges are used for bin height when normalizing
     Inputs:
       binNum: index indicating which redshift distribution to use
-        For individual bin use {1,2,3,4,5} with dndzMode=1,
-          or {1,2,...,nBins} with dndzMode=2
-        Default: 0, for sum of all bins
+        {1,2,...,nBins}
+        if binNum == 0, sum of all bins will be used, 
+          and binSmooth will be set to 0
+        Default: 0
       zs: the redshifts to calculate DNDZ at
-        Note that these are not the same ones used for the normalization
+        redshift values outside range (zmin,zmax) will return zero
       dndzMode: indicate which method to use to select dNdz curves
         1: use observational DES-SV data from Crocce et al
         2: use LSST model distribution, divided into rectagular bins (Default)
@@ -455,6 +496,8 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
         z0: controls width of distribution
         zmax: maximum redshift in range of bins
         nBins: number of bins to divide range into
+        binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
+          Default: 0 (no smoothing)
       BPZ=True: controls which dndz curves to use in dndzMode = 1
       zmin=0.0: minimum redshift in range of bins
       normPoints=100: number of points per zs interval to use when normalizing
@@ -466,22 +509,51 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
   if dndzMode == 1:
     zmax = 1.5 # hard coded to match domain in dndz files
     rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax)
-  else: # dndzMode == 2:
-    rawDNDZ = lambda z: modelDNDZbin(z,z0,zmax,nBins,binNum,zmin=zmin)
+    binZmin = zmin
+    binZmax = zmax
+  elif dndzMode == 2:
+    smoothDNDZ = modelDNDZbin(zs,z0,zmax,nBins,binNum,zmin=zmin,binSmooth=binSmooth)
+    rawDNDZ = interp1d(zs,smoothDNDZ,assume_sorted=True,kind='slinear')
 
-  # divide redshift range into bins and select desired bin
-  binEdges = np.linspace(zmin,zmax,nBins+1)
-  binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
-  binZmax = binEdges[binNum]
+    # divide redshift range into bins and select desired bin
+    binEdges = np.linspace(zmin,zmax,nBins+1)
+    binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
+    binZmax = binEdges[binNum]
+
+    # accomodate binNum = 0 for entire range
+    if binNum == 0:
+      binZmin = zs[0]
+      binZmax = zs[-1]
+      binSmooth = 0
+
+    if binSmooth != 0:
+      # adjust binZmin, binZmax to appropriate cutoff for smoothed bin
+      # bin already smoothed by modelDNDZbin
+
+      # not yet implemented
+      pass
+
+  else: # really, it should be dndzMode = 1 or 2
+    print 'covfefe!'
+    return 0
+
+  # select bin indices
+  binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
+  #notBinIndices = np.where(np.logical_or( zs<binZmin, zs>binZmax ))
+  #print 'binIndices: ',binIndices
+  #print 'notBinIndices: ',notBinIndices
 
   # get normalization factor
-  normFac = normBin(rawDNDZ,binZmin,binZmax,zs,normPoints,verbose=verbose)
+  normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,verbose=verbose)
 
- # get non-normalized DNDZ  
-  myDNDZ = rawDNDZ(zs)
-  if binNum != 0:
-    myDNDZ[np.where(zs< binZmin)] = 0
-    myDNDZ[np.where(zs>=binZmax)] = 0
+  # get non-normalized DNDZ
+  binDNDZ = rawDNDZ(zs[binIndices])
+  myDNDZ = np.zeros(zs.size)
+  myDNDZ[binIndices] = binDNDZ
+  
+  #if binNum != 0 and dndzMode == 2:
+  #  myDNDZ[np.where(zs< binZmin)] = 0
+  #  myDNDZ[np.where(zs>=binZmax)] = 0
 
   if verbose:
     myZs = zs[np.where(np.logical_and( zs>=binZmin, zs<binZmax ))]
@@ -539,9 +611,37 @@ def byeBiasFit():
   return lambda z: 1+0.84*z
 
 
+def gaussian(x,mu,sig):
+  """
+    Purpose:
+      evaluate Gaussian function at input points
+    Inputs:
+      x: numpy array of points to evaluate gaussian at
+      mu: the mean
+      sig: the standard deviation
+    Returns:
+      the value of the Gaussian at each point in x
+  """
+  return 1./(np.sqrt(2.*np.pi)*sig) * np.exp(-np.power((x-mu)/sig, 2)/2.)
+
+
+def gSmooth():
+  """
+    Purpose:
+      smooth a tophat-stamped bin by convolution with a Gaussian
+    Inputs:
+
+    Returns:
+
+  """
+
+
+  return 0
+
+
 def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
                 binNum=0,zmin=0.0,zmax=4.0,nBins=10,z0=0.3,
-                doNorm=True,useWk=False):
+                doNorm=True,useWk=False,binSmooth=0):
   """
     window function for galaxy distribution
     Inputs:
@@ -551,23 +651,28 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
         default: all equal to 1
       BPZ: flag to indicate BPZ or TPZ when dndzMode=1; True for BPZ
       binNum: index indicating which redshift distribution to use
-        For individual bin use {1,2,3,4,5} with dndzMode=1,
-          or {1,2,...,nBins} with dndzMode=2
-        Default: 0, for sum of all bins
+        {1,2,...,nBins}
+        if binNum == 0, sum of all bins will be used, 
+          and binSmooth will be set to 0
+        Default: 0
       dndzMode: indicate which method to use to select dNdz curves
         1: use observational DES-SV data from Crocce et al
-        2: use LSST model distribution, divided into rectagular bins (Default)
-      zmin,zmax: the min,max redshift to use in dndzMode=2 or useWk=True
+        2: use LSST model distribution, divided into bins (Default)
+      doNorm: set to True to normalize dN/dz.
+        Default: True
       Parameters only used in dndzMode = 2:
         nBins: number of bins to create
           Default: 10
         z0: controls width of full dNdz distribution
-        doNorm: set to True to normalize dN/dz.
-          Default: 
-        useWk: set to True to use W^kappa as dN/dz (overrides all other dNdz settings)
-          Defalut: 
+          Default: 0.3 (LSST-like)
+        zmin,zmax: the min,max redshift to use
+          Defaults: 0,4
+        useWk: set to True to use W^kappa as dN/dz
+          Defalut: False
+        binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
+          Default: 0 (no smoothing)
     Returns:
-      array of W^galaxies values evaluated at input chi values
+      array of W^galaxies values evaluated at input myPk.chis values
   """
   # get redshift array, etc.
   PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
@@ -583,29 +688,34 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
   #  why not calculate as 1/H(z)?
   dzdchi = dzs/dchis
 
-  # get dNdz according to useWk,doNorm settings
-  if useWk:
+  # get dNdz according to dndzMode,useWk,doNorm,binSmooth settings
+  if useWk and dndzMode == 2:
     # do not use biases here since they are multiplied in later
     if doNorm:
-      myDNDZ = getNormalizedWinKbin(myPk,binNum,zs,zmin=zmin,zmax=zmax,nBins=nBins)
+      myDNDZ = getNormalizedWinKbin(myPk,binNum,zs,zmin=zmin,zmax=zmax,BPZ=BPZ,
+                                    nBins=nBins,binSmooth=binSmooth,dndzMode=dndzMode)
     else:
-      myDNDZ = winKappa(myPk,binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins)
-  else: # not W_kappa
+      myDNDZ = winKappa(myPk,binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins,
+                        dndzMode=dndzMode,binSmooth=binSmooth)
+  else: # not W_kappa or not dndzMode 2
     if doNorm:
-      myDNDZ = getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,dndzMode=dndzMode,BPZ=BPZ)
+      # this function will do its own dndzMode selection
+      myDNDZ = getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,dndzMode=dndzMode,
+                                    BPZ=BPZ,zmin=zmin,binSmooth=binSmooth)
     else: # do not do normalization
       if dndzMode == 1:
         zmin = 0.0
         zmax = 1.5 # hard coded to match domain in dndz files
         rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax)
+        myDNDZ = rawDNDZ(zs) 
       else: # dndzMode == 2:
-        rawDNDZ = lambda z: modelDNDZbin(z,z0,zmax,nBins,binNum,zmin=zmin)
-      myDNDZ = rawDNDZ(zs) 
+        myDNDZ = modelDNDZbin(zs,z0,zmax,nBins,binNum,zmin=zmin,binSmooth=binSmooth)
 
   return dzdchi*myDNDZ*biases
 
 
-def winKappa(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,**kwargs):
+def winKappa(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
+             dndzMode=2,binSmooth=0,includeEdges=False,**kwargs):
   """
     window function for CMB lensing convergence
     Inputs:
@@ -615,14 +725,26 @@ def winKappa(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,**kwargs):
       binNum=0: index indicating which redshift distribution to use
         For individual bin use {1,2,...,nBins}
         Default: 0, for sum of all bins, including outside (zmin, zmax)
-      zmin,zmax: min,max redshift of set of bins 
-        Defaults: 0,4
-      nBins: number of bins to create
-        Default: 10
+      dndzMode: indicate which method is used for corresponding dNdz curves
+        1: use observational DES-SV data from Crocce et al
+        2: use LSST model distribution, divided into bins (Default)
+      BPZ: set to True to use BPZ curves for dNdz, False for TPZ
+        Default: True
+      Parameters only used in dndzMode = 2:
+        nBins: number of bins to create
+          Default: 10
+        zmin,zmax: the min,max redshift to use
+          Defaults: 0,4
+        binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
+          Default: 0 (no smoothing)
+        includeEdges: set to True to add one more myPk.zs point outside of bin range
+          on each end of bin in set of nonzero values returned; 
+          useful for interpolation over entire bin
+          Default: False
       **kwargs: place holder so that winKappa and winGalaxies can have
         same parameter list
     Returns:
-      array of W^kappa values evaluated at input chi
+      array of W^kappa values evaluated at input myPk.chis
   """
   # get redshift array, etc.
   PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
@@ -639,34 +761,86 @@ def winKappa(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,**kwargs):
   winK *= (1.5*myOmegaM*myH0**2)
 
   # slice out the bin of interest
-  binEdges = np.linspace(zmin,zmax,nBins+1)
-  if binNum != 0:
-    winK[np.where(zs<binEdges[binNum-1])] = 0
-    winK[np.where(zs>binEdges[binNum  ])] = 0
+  if dndzMode == 1: # use observational dndz
+    nBins = 5
+    mode1zmin = 0
+    mode1zmax = 1.5 # match the dndz files
+    if binNum != 0:
+      binIndices = np.where(np.logical_and( zs>=mode1zmin, zs<=mode1zmax ))
+      notBinIndices = np.where(np.logical_or( zs<mode1zmin, zs>mode1zmax ))
+      #print 'binIndices: ',binIndices
+      #print 'notBinIndices: ',notBinIndices
+      if binNum > nBins: # just return everything over the defined bins
+        winK[binIndices] = 0
+      else: # one of the bins has been indicated
+        binZs = zs[binIndices]
+        dndzRatioInterp = getDNDZratio(binNum=binNum,BPZ=BPZ,
+                                       zmin=mode1zmin,zmax=mode1zmax)
+        dndzRatios = dndzRatioInterp(binZs)
+        # use ratios to define winKappa bin
+        #print 'dndzRatios nan indices: ',np.where(np.isnan(dndzRatios)==True)
+        winK[binIndices] *= dndzRatios
+        winK[notBinIndices] = 0
+
+  elif dndzMode == 2: # use dndz model
+    # create tophat bins
+    binEdges = np.linspace(zmin,zmax,nBins+1)
+    #print binEdges
+    if binNum != 0:
+      #winK[np.where(zs<binEdges[binNum-1])] = 0
+      #winK[np.where(zs>binEdges[binNum  ])] = 0
+      indicesBelowBin = np.where(zs<binEdges[binNum-1])
+      indicesAboveBin = np.where(zs>binEdges[binNum  ])
+      if includeEdges: # this is here to allow interp over entire bin
+        if zmin != 0:
+          indicesBelowBin = indicesBelowBin[0][:-1]
+        #if binNum != nBins:
+        #print indicesAboveBin[0][1:]
+        indicesAboveBin = indicesAboveBin[0][1:]
+      winK[indicesBelowBin] = 0
+      winK[indicesAboveBin] = 0
+      if binSmooth != 0: #do smoothing
+        # convolve tophat bins with gaussian
+        # smooth winK array
+        # write a separate function for this
+        # may be better to have interp function call smoothing rather than this one
+
+        pass
+    #print winK
+
+  else: # really, dndzMode has to be 1 or 2.
+    print 'covfefe!'
+    return 0
+
+  #help(winK)
+  #print 'winK: ',winK
+  #print 'winK nan indices: ',np.where(np.isnan(winK)==True)
 
   return winK
 
 
-def getWinKinterp(myPk,biases=None):
+def getWinKinterp(myPk,**kwargs):
   """
     Purpose:
       get interpolation function for winKappa(z)
     Inputs:
       myPk: MatterPower object
-      biases: amplitude of lensing, array corresponding to zs values
-        default: all equal to 1
+      binNum:
+      zmin:
+      **kwargs: keyword args to pass along to winKappa
     Returns:
       function for interpolating winKappa(z) result
   """
-  winK = winKappa(myPk,biases=biases)
+  winK = winKappa(myPk,includeEdges=True,**kwargs)
   # insert (0,0) at beginning
   zs = np.insert(myPk.zs,0,0)
   winK = np.insert(winK,0,0)
   return interp1d(zs,winK,assume_sorted=True,kind='slinear')
 
 
-def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,
-                      biases=None,normPoints=1000,verbose=False):
+def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
+                         BPZ=True,biases=None,normPoints=1000,binSmooth=0,
+                         verbose=False):
   """
     Purpose:
       return normalized WinK array for one particular bin
@@ -676,12 +850,23 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,
       myPk: a MatterPower object
       binNum: index indicating which redshift distribution to use
         {1,2,...,nBins}
-        Default: 0, for sum of all bins up to zmax
+        if binNum == 0, sum of all bins will be used, 
+          and binSmooth will be set to 0
+        Default: 0
       zs: the redshifts to evaluate WinK at
-      zmin,zmax: minimum,maximum redshift in range of bins
-        Defaults: 0,4
-      nBins: number of bins to divide range into
-        Default: 1
+        must all be zmin <= zs <= zmax
+      dndzMode: indicate which method used to select corresponding dNdz curves
+        1: use observational DES-SV data from Crocce et al
+        2: use LSST model distribution, divided into rectagular bins (Default)
+      BPZ: set to True to use BPZ curves for dNdz, False for TPZ
+        Default: True
+      Parameters only used in dndzMode = 2:
+        nBins: number of bins to create
+          Default: 10
+        zmin,zmax: the min,max redshift to use
+          Defaults: 0,4
+        binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
+          Default: 0 (no smoothing)
       biases=None: lensing amplitudes indexed the same as redshift points
         Default = None, indicating amplitude = 1 everywhere.
       normPoints=100: number of points per zs interval to use when normalizing
@@ -690,24 +875,44 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,
       Normalized array of winK corresponding to redshifts zs
   """
   # get Wk(z)
-  rawWinK = getWinKinterp(myPk,biases=biases)
+  rawWinK = getWinKinterp(myPk,biases=biases,binNum=binNum,zmin=zmin,zmax=zmax,
+                          nBins=nBins,dndzMode=dndzMode,binSmooth=binSmooth,BPZ=BPZ)
 
-  # divide redshift range into bins and select desired bin
-  binEdges = np.linspace(zmin,zmax,nBins+1)
-  binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
-  binZmax = binEdges[binNum]
+  # get binZmin, binZmax for normalization range
+  if dndzMode == 1:
+    zmin = 0.0
+    zmax = 1.5 # hard coded to match dndz files
+    binZmin = zmin
+    binZmax = zmax
+    pass
+  elif dndzMode ==2:
+    # divide redshift range into bins and select desired bin
+    binEdges = np.linspace(zmin,zmax,nBins+1)
+    binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
+    binZmax = binEdges[binNum]
 
-  # accomodate binNum = 0 for entire range
-  if binNum == 0:
-    binZmin = zs[0]
-    binZmax = zs[-1]
+    # accomodate binNum = 0 for entire range
+    if binNum == 0:
+      binZmin = zmin
+      binZmax = zmax
+      binSmooth = 0
+
+    if binSmooth != 0:
+      # adjust binZmin, binZmax to appropriate cutoff for smoothed bin
+
+      # not yet implemented
+      pass
+
+  else: # really, dndzMode should be 1 or 2
+    print 'covfefe!'
+    return 0
 
   # get normalization factor
   normFac = normBin(rawWinK,binZmin,binZmax,zs,normPoints,verbose=verbose)
 
   # get non-normalized winK  
   myWinK = rawWinK(zs)
-  if binNum != 0:
+  if binNum != 0 and dndzMode == 2:
     myWinK[np.where(zs< binZmin)] = 0
     myWinK[np.where(zs>=binZmax)] = 0
 
@@ -728,8 +933,8 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,
 
 
 def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,
-          dndzMode1=1,dndzMode2=1,binNum1=0,binNum2=0,lmax=2500,
-          zmax=4,nBins=10,z0=0.3):
+          dndzMode=1,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
+          z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True):
   """
     Purpose: get angular power spectrum
     Inputs:
@@ -740,7 +945,7 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,
         default: None; indicates that all biases equal to 1
       winfunc1,winfunc2: the window functions
         should be winKappa or winGalaxies
-      dndzMode1,dndzMode2: select which dNdz scheme to use for winfunc1,2
+      dndzMode: select which dNdz scheme to use for winfuncs
       binNum1,binNum2: index indicating which bin to use
         If dndzMode = 1:
           integer in {0,1,2,3,4,5}
@@ -749,11 +954,19 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,
           integer in {0,1,...,nBins-1,nBins}
         Index=0 indicates sum of all other curves
       lmax: highest ell to return.  (lowest will be 2)
+      doNorm: set to True to normalize dN/dz.
+        Default: True
+      BPZ: set to true to use BPZ dNdz in dndzMode 1, False for TPZ
+        Default: True
       Parameters only used in dndzMode = 2: (same for both winfuncs)
-        zmax: highest z to use creating bins
+        zmin,zmax: lowest,highest z to use creating bins
         nBins: number of bins to use
         z0: width of full galaxy distribution
           Default: 0.3 (from LSST science book)
+        useWk: set to True to use W^kappa as dN/dz
+          Defalut: False
+        binSmooth: parameter that controls the amount of smoothing of bin edges
+          Default: 0 (no smoothing)
     Returns: 
       l,  the ell values (same length as Cl array)
       Cl, the power spectrum array
@@ -784,10 +997,12 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappa,winfunc2=winKappa,
 
   # get window functions
   # note that winKappa will ignore extra keywords due to use of **kwargs 
-  win1=winfunc1(myPk,biases=biases1,z0=z0,dndzMode=dndzMode1,binNum=binNum1,
-                zmax=zmax,nBins=nBins)
-  win2=winfunc2(myPk,biases=biases2,z0=z0,dndzMode=dndzMode2,binNum=binNum2,
-                zmax=zmax,nBins=nBins)
+  win1=winfunc1(myPk,biases=biases1,z0=z0,dndzMode=dndzMode,binNum=binNum1,
+                zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
+                binSmooth=binSmooth,BPZ=BPZ)
+  win2=winfunc2(myPk,biases=biases2,z0=z0,dndzMode=dndzMode,binNum=binNum2,
+                zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
+                binSmooth=binSmooth,BPZ=BPZ)
 
   #Do integral over chi
   ls = np.arange(2,lmax+1, dtype=np.float64)
@@ -875,13 +1090,33 @@ def plotDNDZsum(zmin=0.0,zmax=1.5):
     plt.show()
 
 
-def plotRedshiftAppx(myPk,dndzMode=1,nBins=5):
+def plotDNDZratio(zmin=0.0,zmax=1.5):
+  """
+  plot the ratio of bins to sum of em...
+  """
+  # points for plotting
+  zs = np.linspace(zmin,zmax,1000) 
+
+  for BPZ in (True,False):
+    for binNum in range(1,6):
+      ratioInterp = getDNDZratio(binNum=binNum,BPZ=BPZ)
+      plt.plot(zs,ratioInterp(zs))
+    if BPZ:
+      title='BPZ'
+    else:
+      title='TPZ'
+    plt.title(title)
+    plt.show()
+
+
+def plotRedshiftAppx(myPk,dndzMode=1,BPZ=True,nBins=5):
   """
     for plotting the equivalent redshift bins in the approximation to the integral
       over distance from here to last scattering, compared to g,k kernels
     Inputs:
       myPk: matterpower object; contains redshift points
       dndzMode: which type of dndz to plot
+      BPZ: true for BPZ, false for TPZ
       nBins: number of bins to use
         use 5 for dndzMode = 1 (default)
 
@@ -894,7 +1129,7 @@ def plotRedshiftAppx(myPk,dndzMode=1,nBins=5):
   winK  = winKappa(myPk)
   plt.plot(zs,winK)
   for binNum in range(1,nBins+1):
-    winG = winGalaxies(myPk,binNum=binNum,dndzMode=dndzMode)
+    winG = winGalaxies(myPk,BPZ=BPZ,binNum=binNum,dndzMode=dndzMode)
     plt.plot(zs,winG)
 
 
@@ -931,7 +1166,8 @@ def plotCl(ls,Cl):
 
 
 def plotKG(myPk,biasesK=None,biasesG=None,lmax=2500,
-           dndzMode=1,binNum=0,zmax=4,nBins=10,z0=0.3):
+           dndzMode=1,binNum=0,zmax=4,nBins=10,z0=0.3,
+           doNorm=True,useWk=False,binSmooth=0):
   """
   Purpose:
     to plot each C_l for kappa, galaxy combinations
@@ -952,22 +1188,29 @@ def plotKG(myPk,biasesK=None,biasesG=None,lmax=2500,
       if dndzMode is 1: binNum in {1,2,3,4,5}
       if dndzMode is 2: binNum in {1,2,...,nBins-1,nBins}
       Default: 0 for sum of all bins
+    doNorm:
     Parameters only used in dndzMode =2:
       zmax: highest redshift to include in bins
       nBins: number of bins to divide 0<z<zmax into
       z0: controls the width of the total galaxy distribution
+      useWk:
+      binSmooth:
 
   """
-  ls1, Cl1 = getCl(myPk,biases1=biasesK,biases2=biasesK,winfunc1=winKappa,   winfunc2=winKappa)
+  ls1, Cl1 = getCl(myPk,biases1=biasesK,biases2=biasesK,winfunc1=winKappa,   winfunc2=winKappa,
+                   doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
   ls2, Cl2 = getCl(myPk,biases1=biasesK,biases2=biasesG,winfunc1=winKappa,   winfunc2=winGalaxies, 
-                             dndzMode2=dndzMode,                 binNum2=binNum,
-                   zmax=zmax,nBins=nBins,z0=z0)
+                   dndzMode=dndzMode,               binNum2=binNum,
+                   zmax=zmax,nBins=nBins,z0=z0,
+                   doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
   #ls3, Cl3 = getCl(myPk,biases1=biasesG,biases2=biasesK,winfunc1=winGalaxies,winfunc2=winKappa,   
-  #        dndzMode1=dndzMode,                   binNum1=binNnum,
-  #                 zmax=zmax,nBins=nBins,z0=z0)
+  #                 dndzMode=dndzMode,binNum1=binNnum,
+  #                 zmax=zmax,nBins=nBins,z0=z0,
+  #                 doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
   ls4, Cl4 = getCl(myPk,biases1=biasesG,biases2=biasesG,winfunc1=winGalaxies,winfunc2=winGalaxies,
-          dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=binNum,binNum2=binNum,
-                   zmax=zmax,nBins=nBins,z0=z0)  
+                   dndzMode=dndzMode,binNum1=binNum,binNum2=binNum,
+                   zmax=zmax,nBins=nBins,z0=z0,
+                   doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)  
 
   p1=plt.semilogy(ls1,Cl1,label='$\kappa\kappa$')
   p2=plt.semilogy(ls2,Cl2,label='$\kappa g$')
@@ -981,7 +1224,8 @@ def plotKG(myPk,biasesK=None,biasesG=None,lmax=2500,
   plt.show()
 
 
-def plotGG(myPk,biases1=None,biases2=None,lmax=2000):
+def plotGG(myPk,biases1=None,biases2=None,lmax=2000,
+           doNorm=True,useWk=False,binSmooth=0):
   """
   Purpose:
     plot all Cl^{g_i g_j} for i,j in {1,2,3,4,5}
@@ -991,11 +1235,14 @@ def plotGG(myPk,biases1=None,biases2=None,lmax=2000):
       must be same length as myPk.zs
       same pair of biases used for each x-cor (this should be improved)
     lmax: highest l to plot
+    doNorm:
+    useWk:
+    binSmooth:
   """
   for i in range(1,6):
     for j in range(i,6):
       print 'starting g_',i,' g_',j
-      ls,Cl = getCl(myPk,biases1=biases1,biases2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=i,binNum2=j)
+      ls,Cl = getCl(myPk,biases1=biases1,biases2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=i,binNum2=j,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
       plt.semilogy(ls,Cl,label='g_'+str(i)+', g_'+str(j))
   plt.xlim(0,lmax)
   plt.xlabel(r'$\ell$')
@@ -1005,7 +1252,7 @@ def plotGG(myPk,biases1=None,biases2=None,lmax=2000):
   plt.show()
 
 
-def plotGGsum(myPk,biases=None):
+def plotGGsum(myPk,biases=None,doNorm=True,useWk=False,binSmooth=0):
   """
   Note: this is basically included in plotKG
   Note: does not have option for getCl to use anything but dndzMode=1
@@ -1014,8 +1261,12 @@ def plotGGsum(myPk,biases=None):
     myPk: a matterPower object
     biases: array of galaxy biases
       must be same length as myPk.zs
+    doNorm:
+    useWk:
+    binSmooth:
+
   """
-  ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0)
+  ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
   plt.semilogy(ls,Cl)
   plt.title('C_l^gg for sum of all dNdz curves')
   plt.show()
@@ -1035,7 +1286,8 @@ def plotModelDNDZ(z0=0.3,zmax=4):
   plt.show()
 
 
-def plotModelDNDZbins(z0=0.3,zmax=4,nBins=10,doNorm=False,normPoints=100):
+def plotModelDNDZbins(z0=0.3,zmax=4,nBins=10,doNorm=False,normPoints=100,
+                      useWk=False,binSmooth=0):
   """
   plot model DNDZ cut up into bins
   Inputs:
@@ -1044,18 +1296,22 @@ def plotModelDNDZbins(z0=0.3,zmax=4,nBins=10,doNorm=False,normPoints=100):
     nBins: number of bins to divide up
     doNorm = False: set to True to normalize bins
     normPoints: number of points per zs interval to use when normalizing
+    binSmooth: controls smoothing of tophat-stamped bins
+      Default: 0
   """
   zs = np.linspace(0,zmax,normPoints)
   for bNum in range(1,nBins+1):
     if doNorm:
-      dndzBin = getNormalizedDNDZbin(bNum,zs,z0,zmax,nBins,normPoints=normPoints)
+      dndzBin = getNormalizedDNDZbin(bNum,zs,z0,zmax,nBins,normPoints=normPoints,
+                                     binSmooth=binSmooth,dndzMode=2) #2 for model
     else:
-      dndzBin = modelDNDZbin(zs,z0,zmax,nBins,bNum)
+      dndzBin = modelDNDZbin(zs,z0,zmax,nBins,bNum,binSmooth=binSmooth)
     plt.plot(zs,dndzBin)
   plt.show()
 
 
-def plotWinKbins(myPk,zmin=0.0,zmax=4.0,nBins=10,doNorm=False,normPoints=100):
+def plotWinKbins(myPk,zmin=0.0,zmax=4.0,nBins=10,doNorm=False,normPoints=100,
+                 binSmooth=0,dndzMode=2,verbose=False,BPZ=True):
   """
   plot winKappa cut up into normalized bins
   Inputs:
@@ -1064,33 +1320,50 @@ def plotWinKbins(myPk,zmin=0.0,zmax=4.0,nBins=10,doNorm=False,normPoints=100):
     nBins: number of bins to divide up
     doNorm=False: set to True to normalize bins
     normPoints: number of points per zs interval to use when normalizing
+    binSmooth: controls smoothing of tophat-stamped bins (unless dndzMode == 1)
+      Default: 0
+    BPZ: set to True to use BPZ curves for dNdz, False for TPZ
+      Default: True
+    dndzMode: indicate which method to use to select corresponding dNdz curves
+      1: use observational DES-SV data from Crocce et al
+      2: use LSST model distribution, divided into rectagular bins (Default)
+    verbose: control how much output is given by normBin
+      Default: False
   """
-  zs = np.linspace(0,zmax,normPoints)
+  zs = np.linspace(zmin,zmax,normPoints)
   biases = None
+  if dndzMode == 1:
+    nBins = 5 # to match dndz files
   for binNum in range(1,nBins+1):
     if doNorm:
-      winKbin = getNormalizedWinKbin(myPk,binNum,zs,zmin=zmin,zmax=zmax,nBins=nBins,
-                      biases=biases,normPoints=normPoints)
+      winKbin = getNormalizedWinKbin(myPk,binNum,zs,zmin=zmin,zmax=zmax,
+                      nBins=nBins,biases=biases,normPoints=normPoints,BPZ=BPZ,
+                      binSmooth=binSmooth,dndzMode=dndzMode,verbose=verbose)
     else:
-      # get Wk(z)
-      rawWinK = getWinKinterp(myPk,biases=biases)
-
-      # divide redshift range into bins and select desired bin
-      binEdges = np.linspace(zmin,zmax,nBins+1)
-      binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
-      binZmax = binEdges[binNum]
-
-      # get non-normalized winK  
+      rawWinK = getWinKinterp(myPk,biases=biases,binNum=binNum,zmin=zmin,zmax=zmax,
+                              nBins=nBins,dndzMode=dndzMode,binSmooth=binSmooth,BPZ=BPZ)
       winKbin = rawWinK(zs)
-      if binNum != 0:
-        winKbin[np.where(zs<binZmin)] = 0
-        winKbin[np.where(zs>binZmax)] = 0
-      #winKbin = winKappa(myPk,binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins)
+
     plt.plot(zs,winKbin)
 
   plt.show()
 
   
+def plotGaussians():
+  """
+    plot some gaussians to test the code
+  """
+  xs = np.linspace(-5,10,100)
+  ys1 = gaussian(xs,0,1)
+  ys2 = gaussian(xs,0,2)
+  ys3 = gaussian(xs,3,1)
+  ys4 = gaussian(xs,-0.5,2)
+  plt.plot(xs,ys1)
+  plt.plot(xs,ys2)
+  plt.plot(xs,ys3)
+  plt.plot(xs,ys4)
+  plt.show()
+
 
 
 ################################################################################
@@ -1107,8 +1380,9 @@ def test(doPlot = True):
   # replot digitized dNdz
   #replotDigitizedDNDZ()
   
-  # plot their sum
+  # plot their sum and ratio
   #plotDNDZsum()
+  #plotDNDZratio()
 
   # create matterPower object with default parameters
   #print 'creating myPk...'

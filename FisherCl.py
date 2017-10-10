@@ -32,6 +32,7 @@
       ZK, 2017.10.04
     Note: Lloyd thought I should get this working in 2 weeks. 
       It took 6 weeks for me to do it.  ugh.  ZK, 2017.10.05
+    Added overlapping redshift bin functionality (dndzMode1); ZK, 2017.10.06
 
 """
 
@@ -68,8 +69,9 @@ class FisherMatrix:
   """
 
 
-  def __init__(self,nz=1000,lmax=2000,zmax=16,nBins=10,z0=1.5,
-               noAs=False, **cos_kwargs):
+  def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,noAs=False,dndzMode=2, 
+               nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
+               **cos_kwargs):
     """
     
       Inputs:
@@ -77,12 +79,22 @@ class FisherMatrix:
           Important usage is as the number of points to use in approximation of
             C_l integrals
         lmax: maximum ell value to use in summations
-        zmax: maximum z to use in binning for A_i, b_i parameters
-        nBins: number of bins to use for A_i, b_i parameters
-        z0: controls the width of the model galaxy distribution
+        zmin,zmax: minimum,maximum z to use in binning for A_i, b_i parameters
         noAs: set to True if dCl/dA are all zero (As are fixed)
           This will just set the derivatives to zero, but rows and columns
           in Fij will still be there, but all zero.
+        doNorm: set to True to normalize dN/dz.
+          Default: True
+        BPZ: set to true to use BPZ dNdz curves in dndzMode 1, False for TPZ
+          Default: True
+        Parameters only used in dndzMode = 2:
+          nBins: number of bins to create
+            Default: 10
+          z0: controls width of full dNdz distribution
+          useWk: set to True to use W^kappa as dN/dz
+            Defalut: False
+          binSmooth: parameter that controls the amount of smoothing of bin edges
+            Default: 0 (no smoothing)
         **cos_kwargs: the cosmological parameters for camb's set_cosmology
 
     """
@@ -99,19 +111,23 @@ class FisherMatrix:
         'tau'   : 0.06  }
     self.cosParams.update(cos_kwargs)
 
-    # set other parameters
-    self.lmax = lmax
+    # modify for dndzMode = 1
+    if dndzMode == 1:
+      nBins = 5
+      zmin = 0
+      zmax = 1.5 # to match dndz files
 
-    # set dndzMode and related params for use in winGalaxies and getNormalizedDNDZbin functions
-    dndzMode = 2
-    #zmax = 4
-    #nBins = 10
-    #z0 = 0.3
-    self.zmax=zmax
-    self.zmin=0.0
+    # set other parameters
+    self.dndzMode = dndzMode
+    self.BPZ = BPZ
+    self.zmin = zmin
+    self.zmax = zmax
     self.nBins = nBins
     self.z0 = z0
-    tophatBins = True # true if bins do not overlap, false if they do
+    if binSmooth == 0 and dndzMode == 2:
+      tophatBins = True # true if bins do not overlap, false if they do
+    else:
+      tophatBins = False
     nMaps = nBins+1 # +1 for kappa map
 
     # observables list: defined as self.obsList; created along with self.covar
@@ -127,7 +143,6 @@ class FisherMatrix:
     # create fiducial galxy bias and lensing amplitude as one parameter per bin
     # to match zs, dzs exactly to what normalization routine does, 
     #   use normPoints = 0 (no added points)
-    zmin = self.zmin
     normPoints = 0
     verbose = False
 
@@ -144,11 +159,13 @@ class FisherMatrix:
     for binNum in range(nBins):
       # get weighted average over dNdz as integral of product with normalized dndz
       normalizedDNDZ = cp.getNormalizedDNDZbin(binNum+1,zArray,z0,zmax,nBins,
-                          dndzMode=dndzMode,zmin=zmin,normPoints=normPoints,verbose=verbose)
+                          dndzMode=dndzMode,zmin=zmin,normPoints=normPoints,
+                          binSmooth=binSmooth,verbose=verbose)
       binBs[binNum] = np.sum(normalizedDNDZ*bOfZ)*deltaZ 
       # get weighted average over dWdz (lensing kernel)
       normalizedWinK = cp.getNormalizedWinKbin(myPk,binNum+1,zArray,zmin=zmin,
-                          zmax=zmax,nBins=nBins,normPoints=normPoints,verbose=verbose)
+                          zmax=zmax,nBins=nBins,normPoints=normPoints,
+                          binSmooth=binSmooth,dndzMode=dndzMode,verbose=verbose)
       binAs[binNum] = np.sum(normalizedWinK*AOfZ)*deltaZ
     self.binBs = binBs
     self.binAs = binAs
@@ -184,9 +201,10 @@ class FisherMatrix:
         # since nonoverlapping bins have zero correlation use this condition:
         if map1==0 or map1==map2 or not tophatBins:
           ells,Cls = cp.getCl(myPk,biases1=biases1,biases2=biases2,
-              winfunc1=winfunc1,winfunc2=winfunc2,
-              dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=map1,binNum2=map2,
-              lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
+              winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
+              dndzMode=dndzMode,binNum1=map1,binNum2=map2,
+              lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+              useWk=useWk,binSmooth=binSmooth)
           self.crossCls[map1,map2] = Cls
           self.crossCls[map2,map1] = Cls #symmetric
     self.ells = ells
@@ -208,23 +226,26 @@ class FisherMatrix:
           biasesGi = np.ones(zs.size)*binBs[bin2]*binAs[bin2]
           # kk
           ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesKi,
-              winfunc1=cp.winKappa,winfunc2=cp.winKappa,
+              winfunc1=cp.winKappa,winfunc2=cp.winKappa,BPZ=BPZ,
               binNum1=bin1+1,binNum2=bin2+1,
-              lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
+              lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+              useWk=useWk,binSmooth=binSmooth)
           self.crossClBinsKK[bin1,bin2] = Cls
           self.crossClBinsKK[bin2,bin1] = Cls #symmetric
           # kg
           ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesGi,
-              winfunc1=cp.winKappa,winfunc2=cp.winGalaxies,
-              dndzMode2=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
-              lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
+              winfunc1=cp.winKappa,winfunc2=cp.winGalaxies,BPZ=BPZ,
+              dndzMode=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
+              lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+              useWk=useWk,binSmooth=binSmooth)
           self.crossClBinsKG[bin1,bin2] = Cls
           self.crossClBinsKG[bin2,bin1] = Cls #symmetric
           # gg
           ells,Cls = cp.getCl(myPk,biases1=biasesGi,biases2=biasesGi,
-              winfunc1=cp.winGalaxies,winfunc2=cp.winGalaxies,
-              dndzMode1=dndzMode,dndzMode2=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
-              lmax=lmax,zmax=zmax,nBins=nBins,z0=z0)
+              winfunc1=cp.winGalaxies,winfunc2=cp.winGalaxies,BPZ=BPZ,
+              dndzMode=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
+              lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+              useWk=useWk,binSmooth=binSmooth)
           self.crossClBinsGG[bin1,bin2] = Cls
           self.crossClBinsGG[bin2,bin1] = Cls #symmetric
 
@@ -409,11 +430,15 @@ class FisherMatrix:
     """
       return array of centers of bins
     """
-    halfBinWidth = (self.zmax-self.zmin)/(2*self.nBins)
-    nHalfBins = (2*np.arange(self.nBins)+1)
-    
-    return halfBinWidth*nHalfBins
-
+    if self.dndzMode == 1:
+      return (0.3,0.5,0.7,0.9,1.1)
+    elif self.dndzMode == 2:
+      halfBinWidth = (self.zmax-self.zmin)/(2*self.nBins)
+      nHalfBins = (2*np.arange(self.nBins)+1)
+      return halfBinWidth*nHalfBins+self.zmin
+    else:
+      print 'die screaming'
+      return 0
 
 
 
