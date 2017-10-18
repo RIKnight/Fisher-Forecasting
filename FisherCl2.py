@@ -1,40 +1,15 @@
 #! /usr/bin/env python
 """
   Name:
-    FisherCl
+    FisherCl2
   Purpose:
     Calculate Fisher matrices for angular power spectra C_l as observables
   Uses:
     crosspower.py (for the angular power spectra)
     pycamb (aka camb)
   Modification History:
-    Written by Z Knight, 2017.08.27
-    Added galaxy bias and lensing amplitude as one parameter per galaxy bin;
-      ZK, 2017.09.01
-    Modified weighting on A_i averaging to use WinK rather than DNDZ;
-      ZK, 2017.09.06
-    Added crossClBins, dClVecs, Fisher matrix calculations; ZK, 2017.09.08
-    Created some testing+plotting functions; ZK, 2017.09.10
-    Reworked power spectra to include 'A' as amplitude of matter distribution,
-      rather than of CMB lensing; ZK, 2017.09.19
-    Removed redundant elements in covariance matrix, etc.  This reduced the
-      number of observables from nMaps**2 to nMaps*(nMaps+1)/2;
-      ZK, 2017.09.20
-    Fixed indexing error in covar creation; ZK, 2017.09.21
-    Fixed indenting error in crossCls creation; ZK, 2017.09.22
-    Modiefied so all d/dA are 0 for testing; ZK, 2017.09.29
-    Added noAs condition to plotting function for testing; ZK, 2017.10.01
-    Added noAs parameter to FisherMatrix init and plotSigmasByNBins;
-      ZK, 2017.10.02
-    Fixed big problem in dClVecs creation involving missing delta 
-      functions; ZK, 2017.10.04
-    Fixed indexing problem (bin vs map) in creation of crossClbins;
-      ZK, 2017.10.04
-    Note: Lloyd thought I should get this working in 2 weeks. 
-      It took 6 weeks for me to do it.  ugh.  ZK, 2017.10.05
-    Added overlapping redshift bin functionality (dndzMode1); ZK, 2017.10.06
-    Added bin smoothing with Gaussian (dndzMode2); ZK, 2017.10.10
-    Expanded cosmological parameter set for nuLambdaCDM; ZK, 2017.10.15
+    FisherCl written by Z Knight, 2017.08.27
+    FisherCl2 spun off from FisherCl; ZK, 2017.10.16
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
 
 """
@@ -49,6 +24,8 @@ from scipy.interpolate import interp1d
 #from scipy import polyfit,poly1d
 import crosspower as cp
 
+# Dan Coe's CLtools (confidence limit; c2009), for Fisher Matrix, etc.
+import CLtools as cl 
 
 ################################################################################
 # some functions
@@ -72,9 +49,9 @@ class FisherMatrix:
   """
 
 
-  def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,noAs=False,dndzMode=2, 
+  def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,**cos_kwargs):
+               **cos_kwargs):
     """
     
       Inputs:
@@ -83,9 +60,6 @@ class FisherMatrix:
             C_l integrals
         lmax: maximum ell value to use in summations
         zmin,zmax: minimum,maximum z to use in binning for A_i, b_i parameters
-        noAs: set to True if dCl/dA are all zero (As are fixed)
-          This will just set the derivatives to zero, but rows and columns
-          in Fij will still be there, but all zero.
         doNorm: set to True to normalize dN/dz.
           Default: True
         BPZ: set to true to use BPZ dNdz curves in dndzMode 1, False for TPZ
@@ -98,12 +72,7 @@ class FisherMatrix:
             Defalut: False
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
-        Parameters for camb's set_params:
-          As: "comoving curvature power at k=piveo_scalar"(sic)
-          ns: "scalar spectral index"
-          r: "tensor to scalar ratio at pivot"
-          kPivot: "pivot scale for power spectrum"
-        Parameters for camb's set_cosmology:
+        Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
     """
@@ -111,20 +80,21 @@ class FisherMatrix:
     # preliminaries
 
     # set cosmological parameters
-    self.As = As
-    self.ns = ns
-    self.r  = r
-    self.kPivot = kPivot
     self.cosParams = {
-        'H0'    : None, #67.51,
+        'H0'    : None, #67.51, #setting H0=None allows cosmomc_theta to be used instead
         'cosmomc_theta'           : 1.04087e-2,
         'ombh2' : 0.02226,
         'omch2' : 0.1193,
         'omk'   : 0,
         'tau'   : 0.063,
 
-        #'mnu'   : 0.06, # (eV)
-        'mnu'   : 0.058, # Lloyd suggested this value for fiducial
+        'As'    : 2.130e-9,
+        'ns'    : 0.9653,
+        'r'     : 0,
+        'kPivot': 0.05,
+
+        'mnu'   : 0.06, # (eV)
+        #'mnu'   : 0.058, # Lloyd suggested this value for fiducial; adjust omch2 if I do use it
         'nnu'   : 3.046,
         'standard_neutrino_neff'  : 3.046,
         'num_massive_neutrinos'   : 1,
@@ -151,13 +121,66 @@ class FisherMatrix:
     nMaps = nBins+1 # +1 for kappa map
 
     # observables list: defined as self.obsList; created along with self.covar
-    # parameters list: not saved in data structure; described later
-    
+    nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+
+    # parameters list:
+    nCosParams = 7 # 6 LCDM + Mnu
+    nParams = nCosParams+nBins
+    paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu']
+    for bin in range(nBins):
+      paramList.append('bin'+str(bin+1))
+    self.nParams   = nParams
+    self.paramList = paramList
+
+    # step sizes for discrete derivatives: must correspond to paramList entries!
+    #   from Allison et. al. (2015) Table III.
+    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020] #last one in eV
+
+
+
+
+    # oh... should adjust omch2 when mnu changes, too!
+
+
+
+
+
+
     # get matter power object
     print 'creating matter power spectrum object...'
-    myPk = cp.matterPower(nz=nz,As=As,ns=ns,r=r,kPivot=kPivot,**self.cosParams)
-    self.myPk = myPk
+    myPk = cp.matterPower(nz=nz,**self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+
+    # get bucketloads more of them for numeric differentiation
+    print 'creating more matter power objects...'
+    myParams = self.cosParams
+    myParamsUpper = []
+    myParamsLower = []
+    myPksUpper = []
+    myPksLower = []
+    for cParamNum in range(nCosParams):
+      print 'creating matter power spectra for ',paramList[cParamNum],' derivative...'
+      # add parameter dictionary to lists; HAVE TO BE COPIES!!!
+      myParamsUpper.append(myParams.copy())
+      myParamsLower.append(myParams.copy())
+      # modify parameter number cParamNum in ditionaries
+      myParamsUpper[cParamNum][paramList[cParamNum]] += deltaP[cParamNum]
+      myParamsLower[cParamNum][paramList[cParamNum]] -= deltaP[cParamNum]
+
+      #print 'cPramNum: ',cParamNum,', param name: ',paramList[cParamNum]
+      #print 'myParamsUpper[cParamNum][paramList[cParamNum]]: ',myParamsUpper[cParamNum][paramList[cParamNum]]
+      #print 'myParamsLower[cParamNum][paramList[cParamNum]]: ',myParamsLower[cParamNum][paramList[cParamNum]]
+      #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
+
+      # create matter power objects and add to lists
+      myPksUpper.append(cp.matterPower(nz=nz,**myParamsUpper[cParamNum]))
+      myPksLower.append(cp.matterPower(nz=nz,**myParamsLower[cParamNum]))
+
+    # save some of this
+    self.myPk = myPk
+    self.myParamsUpper = myParamsUpper
+    self.myParamsLower = myParamsLower
+
 
 
 ################################################################################
@@ -206,7 +229,9 @@ class FisherMatrix:
     # transfer binBs,binAs to biases1,biases2 arrays
     # If I use AOfZ not all 1, this needs to be changed to include summation over bins for kk
 
-    self.crossCls  = np.zeros((nMaps,nMaps,lmax-1)) #-1 to omit ell=1; this one for kappa
+    self.crossCls      = np.zeros((nMaps,nMaps,           lmax-1)) #-1 to omit ell=1
+    self.crossClsPlus  = np.zeros((nMaps,nMaps,nCosParams,lmax-1))
+    self.crossClsMinus = np.zeros((nMaps,nMaps,nCosParams,lmax-1))
 
     # if tophatBins, only the diagonal and 0th row and column will be filled
     print 'starting cross power with entire kappa... '
@@ -234,6 +259,26 @@ class FisherMatrix:
               useWk=useWk,binSmooth=binSmooth)
           self.crossCls[map1,map2] = Cls
           self.crossCls[map2,map1] = Cls #symmetric
+
+          # now the adjustments for numeric derivatives
+          for cParamNum in range(nCosParams):
+            ells,Cls = cp.getCl(myPksUpper[cParamNum],
+                biases1=biases1,biases2=biases2,
+                winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
+                dndzMode=dndzMode,binNum1=map1,binNum2=map2,
+                lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+                useWk=useWk,binSmooth=binSmooth)
+            self.crossClsPlus[map1,map2,cParamNum] = Cls
+            self.crossClsPlus[map2,map1,cParamNum] = Cls #symmetric
+            ells,Cls = cp.getCl(myPksLower[cParamNum],
+                biases1=biases1,biases2=biases2,
+                winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
+                dndzMode=dndzMode,binNum1=map1,binNum2=map2,
+                lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
+                useWk=useWk,binSmooth=binSmooth)
+            self.crossClsMinus[map1,map2,cParamNum] = Cls
+            self.crossClsMinus[map2,map1,cParamNum] = Cls #symmetric
+            
     self.ells = ells
 
     # divide K,G into bins and get crossClbins
@@ -277,12 +322,12 @@ class FisherMatrix:
           self.crossClBinsGG[bin2,bin1] = Cls #symmetric
 
 
-
-
 ################################################################################
     # create covariance matrix
     print 'building covariance matrix... '
-    nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+
+    #nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+    # nCls defined above
     self.covar = np.zeros((nCls,nCls,lmax-1))
 
     # create obsList to contain base nMaps representation of data label
@@ -310,27 +355,28 @@ class FisherMatrix:
     # need to do this to get indices in order that linalg.inv wants them
     self.invCov = np.transpose(np.linalg.inv(np.transpose(self.covar)))
 
-    # check this
-    #myL = 423
-    #print 'check inverse at ell = ',myL,': '
-    #print np.dot(self.invCov[:,:,myL],self.covar[:,:,myL])
-    #print np.dot(self.covar[:,:,myL],self.invCov[:,:,myL])
-
-
-
 
 ################################################################################
     # get derivatives wrt parameters
-
-    # parameters list: a_i in {A_1, A_2, ..., A_nBins, b_1, b_2, ..., b_nBins}
-    #nParams = 2*nBins
-    
-    # use self.crossCls for relevant power spectra
-    # get dC_l^munu/da_i (one vector of derivatives of C_ls for each a_i)
-    # store as matrix with additional dimension for a_i)
     print 'starting creation of C_l derivatives... '
+
+    # parameters list: 7 nuLambdaCDM params + 1 for each bin: 
+    #nCosParams = 7 #defined above
+    #nParams = nCosParams+nBins
+    #paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu']
+    #for bin in range(nBins):
+    #  paramList.append('bin'+str(bin+1))
+    #self.nParams   = nParams
+    #self.paramList = paramList
+
+    # step sizes for discrete derivatives
+    #   from Allison et. al. (2015) Table III.
+    #deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020] #last one for Mnu in eV
+
+    # get dC_l^munu/da_i (one vector of derivatives of C_ls for each param a_i)
+    # store as matrix with additional dimension for a_i)
     # uses same (shortened) nCls as self.covar and self.obsList
-    self.dClVecs = np.empty((nCls, 2*nBins, lmax-1))
+    self.dClVecs = np.empty((nCls, nParams, lmax-1))
     Clzeros = np.zeros(lmax-1) # for putting into dClVecs when needed
     for map1 in range(nMaps):
       print 'starting derivative set ',map1+1,' of ',nMaps,'... '
@@ -338,104 +384,48 @@ class FisherMatrix:
         mapIdx  = map1*nMaps+map2 -map1*(map1+1)/2  
                                    # mapIdx = map index
         for pIdx in range(nBins):  # pIdx = parameter index
-          Ai   = pIdx
-          bi   = nBins+pIdx        # Bs to be after the As
+          bi   = nCosParams+pIdx   # Bs to be after other params
 
           if map1 == 0: #kappa
             if map2 == 0:          #kk
               # this section assumes Sum_i^{nBins+1} W^{k_i} = W^k (completeness)
-              if noAs:
-                self.dClVecs[  mapIdx, Ai] = Clzeros
-              else:
-                self.dClVecs[  mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKK[pIdx,pIdx]
               self.dClVecs[    mapIdx, bi] = Clzeros 
 
             else:                  #kg,gk
               # this section assumes no bin overlap (update later)
               if pIdx+1 == map2: # +1 since 1 more map than bin
-                if noAs:
-                  self.dClVecs[mapIdx, Ai] = Clzeros
-                else:
-                  self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
                 self.dClVecs[  mapIdx, bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
               else: # parameter index does not match bin index
-                self.dClVecs[  mapIdx, Ai] = Clzeros
                 self.dClVecs[  mapIdx, bi] = Clzeros
 
           else: #galaxies          #gg
             if pIdx+1 == map2: # +1 since 1 more map than bin
               if map1 == map2:
-                if noAs:
-                  self.dClVecs[mapIdx, Ai] = Clzeros
-                else:
-                  self.dClVecs[mapIdx, Ai] = 2/binAs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
                 self.dClVecs[  mapIdx, bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
               else:
                 # this section assumes no bin overlap (update later)
-                self.dClVecs[  mapIdx ,Ai] = Clzeros 
                 self.dClVecs[  mapIdx ,bi] = Clzeros 
             else: # parameter index does not match bin index
-              self.dClVecs[    mapIdx, Ai] = Clzeros
               self.dClVecs[    mapIdx, bi] = Clzeros
-            
+    
+        # next do numerical derivs wrt nuLCDM params
+        for pIdx in range(nCosParams):
+          dClPlus  = self.crossClsPlus[map1,map2,pIdx]
+          dClMinus = self.crossClsMinus[map1,map2,pIdx]
+          self.dClVecs[mapIdx, pIdx] = (dClPlus-dClMinus)/(2*deltaP[pIdx])
+    
 
-       
-
-
-
-    # this bit was from when A was A_lens, not A_matter
-    """
-    print 'starting creation of C_l derivatives... '
-    self.dClVecs = np.empty((nCls, 2*nBins, lmax-1))
-    # uses same (shortened) nCls as self.covar and self.obsList
-    Clzeros = np.zeros(lmax-1) # for putting into dClVecs when needed
-    for map1 in range(nMaps):
-      print 'starting derivative set ',map1+1,' of ',nMaps,'... '
-      for map2 in range(map1,nMaps):
-        #mapIdx  = map1*nMaps+map2  # mapIdx = map index
-        #mapIdxT = map2*nMaps+map1  # index for transpose C_l^kg <-> C_l^gk
-        mapIdx  = map1*nMaps+map2 -map1*(map1+1)/2  # mapIdx = map index
-        #mapIdxT = map2*nMaps+map1 -map2*(map2+1)/2  # index for transpose C_l^kg <-> C_l^gk
-        for pIdx in range(nBins):  # pIdx = parameter index
-          Ai = pIdx
-          bi = nBins+pIdx          # Bs to be after the As
-
-          if map1 == 0: #kappa
-            if map2 == 0:          #kk
-              # this section assumes Sum_i^{nBins+1} W^{k_i} = W^k (completeness)
-              self.dClVecs[mapIdx,Ai] = 2/binAs[pIdx] * self.crossClBinsKK[pIdx,pIdx]
-              self.dClVecs[mapIdx,bi] = Clzeros 
-            else:                  #kg,gk
-              # this section assumes no bin overlap (update later)
-              self.dClVecs[mapIdx,Ai] = 1/binAs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
-              self.dClVecs[mapIdx,bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
-              # fill in transpose via symmetry
-              #self.dClVecs[mapIdxT,Ai] = self.dClVecs[mapIdx,Ai]
-              #self.dClVecs[mapIdxT,bi] = self.dClVecs[mapIdx,bi]
-          else: #galaxies          #gg
-            if map1 == map2:
-              self.dClVecs[mapIdx,Ai] = Clzeros
-              self.dClVecs[mapIdx,bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
-            else:
-              # this section assumes no bin overlap (update later)
-              self.dClVecs[mapIdx ,Ai] = Clzeros 
-              self.dClVecs[mapIdx ,bi] = Clzeros 
-              #self.dClVecs[mapIdxT,Ai] = Clzeros 
-              #self.dClVecs[mapIdxT,bi] = Clzeros 
-    """
-
-              
 
 ################################################################################
     #Build Fisher matrix
     #multply vectorT,invcov,vector and add up
     print 'building Fisher matrix from components...'
     print 'invCov.shape: ',self.invCov.shape,', dClVecs.shape: ',self.dClVecs.shape
-    self.Fij = np.zeros((2*nBins,2*nBins)) # indexed by parameters A_i, b_i
-    for i in range(2*nBins):
-      print 'starting bin set ',i+1,' of ',2*nBins
+    self.Fij = np.zeros((nParams,nParams)) # indices match those in paramList
+    for i in range(nParams):
+      print 'starting bin set ',i+1,' of ',nParams
       dClVec_i = self.dClVecs[:,i,:] # shape (nCls,nElls)
-      for j in range(2*nBins):
+      for j in range(nParams):
         dClVec_j = self.dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-1):
@@ -471,13 +461,15 @@ class FisherMatrix:
     """
       get the sigmas from the Fisher Matrix
       Returns:
-        sigmasA,sigmasB
+        #sigmasA,sigmasB
+        sigmas
     """
     Finv = np.linalg.inv(self.Fij)
     sigmas = np.sqrt(np.diag(Finv))
-    sigmasA = sigmas[:self.nBins]
-    sigmasB = sigmas[self.nBins:]
-    return sigmasA,sigmasB
+    #sigmasA = sigmas[:self.nBins]
+    #sigmasB = sigmas[self.nBins:]
+    #return sigmasA,sigmasB
+    return sigmas
 
   def showCovar(self,ell,doLog=False):
     """
@@ -499,11 +491,120 @@ class FisherMatrix:
 
     plt.show()
 
+  def saveFish(self,filename='saveFish.npz'):
+    """
+      calls the saveFish function, defined below
+    """
+    saveFish(self,filename=filename)
 
-  # end of class FisherMatrix
+  def getFish(self,filename='saveFish.npz'):
+    """
+      saves the fisher matrix data, loads it into a Fisher object
+      Inputs:
+        filename:
+      Returns:
+        a Fisher object
+    """
+    saveFish(self,fileame=filename)
+    return Fisher(filename=filename)
+
+
+
+
+# end of class FisherMatrix
+
 
 ################################################################################
+# saving and loading Fisher Matrix results
 
+def saveFish(Fobj,filename='saveFish.npz'):
+  """
+    Save the Fij matrix, fiducial parameter names, and their values
+    to a npz archive.
+    These can be loaded again using loadFish
+    Inputs: 
+      Fobj: the Fisher Matrix object to get data from
+      filename: the name of the file to save to
+  """
+  Fij = Fobj.Fij
+  cosParams = Fobj.cosParams
+  bParams = Fobj.binBs
+  paramList = Fobj.paramList
+
+  paramVals = []
+  for paramNum in range(7):
+    paramVals.append(cosParams[paramList[paramNum]])
+  paramVals = np.hstack((paramVals,bParams))
+
+  np.savez(filename,paramList=paramList,paramVals=paramVals,Fij=Fij)
+    
+def loadFish(filename):
+  """
+    Load fisher matrix data in format used by saveFish
+    Inputs:
+      filename: the name of the file to load data from
+    Returns:
+      paramList,paramVals,Fij (all numpy arrays)
+  """
+  npzFile = np.load(filename)
+  return npzFile['paramList'],npzFile['paramVals'],npzFile['Fij']
+
+
+################################################################################
+# object for using Fisher matrix once it's created
+
+class Fisher:
+  """
+    This class uses the results of the FisherMatrix calculation
+  """
+  def __init__(self,filename='saveFish.npz'):
+    """
+      Inputs:
+        filename: a fisher matrix save file (made by saveFish)
+    """
+    self.paramList,self.paramVals,self.Fij = loadFish(filename)
+
+  def dxdyp(self, aIndex, bIndex):
+    """
+      Return uncertainty in two parameters and their correlation coefficient
+      Function modified from method in Dan Coe's Fisher object
+      Inputs: 
+        aIndex: the index of the first parameter
+        bIndex: the index of the second parameter
+    """
+    C = self.Fij
+    C = C.take((aIndex,bIndex),0)
+    C = C.take((aIndex,bIndex),1)
+    dx = np.sqrt(C[0,0])
+    dy = np.sqrt(C[1,1])
+    dxy = C[0,1]
+    p = dxy / (dx * dy)
+    #self.C = C
+    return dx, dy, p
+
+  def twoParamConf(self,aIndex,bIndex):
+    """
+      plot 2d confidence limit ellipses for 2 parameters
+      Inputs: 
+        aIndex: the index of the first parameter
+        bIndex: the index of the second parameter
+    """
+    # fiducial values
+    xFid = self.paramVals[aIndex]
+    yFid = self.paramVals[bIndex]
+    # labels
+    xLabel = self.paramList[aIndex]
+    yLabel = self.paramList[bIndex]
+
+    dx,dy,p = self.dxdyp(aIndex,bIndex)
+    alpha=0.9
+    limFac = 3
+    cl.plotellsp(xFid,yFid, dx,dy,p, colors=cl.reds,alpha=alpha)
+    plt.xlim([xFid-limFac*dx,xFid+limFac*dx])
+    plt.ylim([yFid-limFac*dy,yFid+limFac*dy])
+    #cl.finishup(xFid,yFid,xLabel,yLabel,c='k',dc='w',sh=0)
+    plt.show()
+  
 
 ################################################################################
 # plotting functions
@@ -525,7 +626,7 @@ def plotSigmas(FInv):
   # hold off on finishing this one...
 
 
-def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,noAs=False,
+def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,
                       doNorm=True,useWk=False,**cos_kwargs):
   """
     plot several sigmas for various values of nBins at one zmax
@@ -534,7 +635,6 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,noAs=False,
       lmax:
       zmax:
       z0:
-      noAs: set to True if dCl/dA are all zero (As are fixed)
       doNorm: normalize dndz
       useWk: use Wk as dndz
       **cos_kwargs: for set_cosmology
@@ -560,19 +660,13 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,noAs=False,
   fig, (ax1,ax2) = plt.subplots(1,2, figsize=(12,6))
   for nBinsIndex,nBinsNum in enumerate(nBinsVals):
     print '\n starting Fisher Matrix ',nBinsIndex+1,' of ',nnBins, ', with nBins=',nBinsNum
-    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zmax,nBins=nBinsNum,z0=z0,noAs=noAs,
+    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zmax,nBins=nBinsNum,z0=z0,
                         doNorm=doNorm,useWk=useWk,**cos_kwargs)
     fidAs = np.append(fidAs,Fobj.binAs)
     fidBs = np.append(fidBs,Fobj.binBs)
 
     print 'inverting Fij ',nBinsIndex+1,' of ',nnBins
-    if noAs:
-      upperQIndices = np.arange(Fobj.nBins)
-      myFij = Fobj.Fij
-      myFij[upperQIndices,upperQIndices] = 1
-      FInv = np.linalg.inv(myFij)
-    else:
-      FInv = np.linalg.inv(Fobj.Fij)
+    FInv = np.linalg.inv(Fobj.Fij)
 
     # check eigenvalues
     w,v = np.linalg.eigh(FInv)
@@ -611,7 +705,7 @@ def plotSigmasByNBins(nz=1000,lmax=2000,zmax=16,z0=1.5,noAs=False,
   return eigs, fidAs, fidBs, sigmaAs, sigmaBs
   
 
-def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,noAs=False,**cos_kwargs):
+def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,**cos_kwargs):
   """
     plot several sigmas for various values of nBins at one zmax
     Inputs:
@@ -619,7 +713,6 @@ def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,noAs=False,**cos_kwargs):
       lmax:
       nBins: total number of bins to use
       z0:
-      noAs: set to True if dCl/dA are all zero (As are fixed)
       **cos_kwargs: for set_cosmology
 
   """
@@ -638,18 +731,12 @@ def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,noAs=False,**cos_kwargs):
   fig, (ax1,ax2) = plt.subplots(1,2, figsize=(12,6))
   for zMaxIndex,zMaxNum in enumerate(zMaxVals):
     print '\n starting Fisher Matrix ',zMaxIndex+1,' of ',nnZmax, ', with zMax=',zMaxNum
-    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zMaxNum,nBins=nBins,z0=z0,noAs=noAs,**cos_kwargs)
+    Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zMaxNum,nBins=nBins,z0=z0,**cos_kwargs)
     fidAs = np.append(fidAs,Fobj.binAs)
     fidBs = np.append(fidBs,Fobj.binBs)
 
     print 'inverting Fij ',zMaxIndex+1,' of ',nnZmax
-    if noAs:
-      upperQIndices = np.arange(Fobj.nBins)
-      myFij = Fobj.Fij
-      myFij[upperQIndices,upperQIndices] = 1
-      FInv = np.linalg.inv(myFij)
-    else:
-      FInv = np.linalg.inv(Fobj.Fij)
+    FInv = np.linalg.inv(Fobj.Fij)
 
     # check eigenvalues
     w,v = np.linalg.eigh(FInv)
@@ -689,7 +776,7 @@ def plotSigmasByZmax(nz=1000,lmax=2000,nBins=16,z0=1.5,noAs=False,**cos_kwargs):
 
 
 
-def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,noAs=False,**cos_kwargs):
+def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,**cos_kwargs):
   """
     plot several sigmas for various values of binSmooth
       with fixed zmax, nBins
@@ -699,7 +786,6 @@ def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,noAs=False,*
       nBins: total number of bins to use
       z0:
       zmax:
-      noAs: set to True if dCl/dA are all zero (As are fixed)
       **cos_kwargs: for set_cosmology
 
   """
@@ -721,18 +807,12 @@ def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,noAs=False,*
   for binSmoothIndex,binSmooth in enumerate(binSmoothVals):
     print '\n starting Fisher Matrix ',binSmoothIndex+1,' of ',nBinSmooth, ', with binSmooth=',binSmooth
     Fobj = FisherMatrix(nz=nz,lmax=lmax,zmax=zmax,nBins=nBins,z0=z0,
-                        binSmooth=binSmooth,noAs=noAs,**cos_kwargs)
+                        binSmooth=binSmooth,**cos_kwargs)
     fidAs = np.append(fidAs,Fobj.binAs)
     fidBs = np.append(fidBs,Fobj.binBs)
 
     print 'inverting Fij ',binSmoothIndex+1,' of ',nBinSmooth
-    if noAs:
-      upperQIndices = np.arange(Fobj.nBins)
-      myFij = Fobj.Fij
-      myFij[upperQIndices,upperQIndices] = 1
-      FInv = np.linalg.inv(myFij)
-    else:
-      FInv = np.linalg.inv(Fobj.Fij)
+    FInv = np.linalg.inv(Fobj.Fij)
 
     # check eigenvalues
     w,v = np.linalg.eigh(FInv)
