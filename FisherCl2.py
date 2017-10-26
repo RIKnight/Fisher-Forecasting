@@ -11,6 +11,7 @@
     FisherCl written by Z Knight, 2017.08.27
     FisherCl2 spun off from FisherCl; ZK, 2017.10.16
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
+    Added H0,Hs,zs to FisherMatrix object; ZK, 2017.10.20
 
 """
 
@@ -93,6 +94,7 @@ class FisherMatrix:
         'r'     : 0,
         'kPivot': 0.05,
 
+        # if fiducial mnu is changed, need to adjust omch2 as well
         'mnu'   : 0.06, # (eV)
         #'mnu'   : 0.058, # Lloyd suggested this value for fiducial; adjust omch2 if I do use it
         'nnu'   : 3.046,
@@ -100,6 +102,8 @@ class FisherMatrix:
         'num_massive_neutrinos'   : 1,
         'neutrino_hierarchy'      : 'normal'}
     self.cosParams.update(cos_kwargs)
+    if self.cosParams['mnu'] != 0.06:
+      print '------!!! Warning! Wrong Mnu detected! Adjustment not yet implemented! !!!------' 
 
     # modify for dndzMode = 1
     if dndzMode == 1:
@@ -136,20 +140,14 @@ class FisherMatrix:
     #   from Allison et. al. (2015) Table III.
     deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020] #last one in eV
 
-
-
-
-    # oh... should adjust omch2 when mnu changes, too!
-
-
-
-
-
-
     # get matter power object
     print 'creating matter power spectrum object...'
     myPk = cp.matterPower(nz=nz,**self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+    #self.H0 = myPk.H0
+    self.H0 = pars.H0
+    self.Hs = myPk.Hs
+    self.zs = myPk.zs
 
     # get bucketloads more of them for numeric differentiation
     print 'creating more matter power objects...'
@@ -166,6 +164,15 @@ class FisherMatrix:
       # modify parameter number cParamNum in ditionaries
       myParamsUpper[cParamNum][paramList[cParamNum]] += deltaP[cParamNum]
       myParamsLower[cParamNum][paramList[cParamNum]] -= deltaP[cParamNum]
+
+      # check for mnu modification and adjust omch2 if necessary
+      if paramList[cParamNum] == 'mnu':
+        omch2Index = np.where(np.array(paramList) == 'omch2')[0][0]
+        deltaOmnh2 = deltaP[cParamNum]/94 #eq.n 12 from Wu et. al.
+        #deltaOmnh2 = pars.omegan*(pars.H0/100)**2 # probably a better measure of omega_nu
+        # note the -=,+= signs get reversed in next 2 lines compared to above
+        myParamsUpper[cParamNum][paramList[omch2Index]] -= deltaOmnh2
+        myParamsLower[cParamNum][paramList[omch2Index]] += deltaOmnh2
 
       #print 'cPramNum: ',cParamNum,', param name: ',paramList[cParamNum]
       #print 'myParamsUpper[cParamNum][paramList[cParamNum]]: ',myParamsUpper[cParamNum][paramList[cParamNum]]

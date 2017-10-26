@@ -40,6 +40,9 @@
     Added bin smoothing with Gaussian (dndzMode2); ZK, 2017.10.10
     Expanded cosmological parameter set for nuLambdaCDM; ZK, 2017.10.15
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
+    Added H0, Hs fields to matterPower; ZK, 2017.10.20
+    Added omega_n to omega_m sum in winKappa; ZK, 2017.10.23
+    Changed matter power interpolator zmax to zstar; ZK, 2017.10.24
 
 """
 
@@ -92,6 +95,9 @@ class matterPower:
       dzs:
       pars:
 
+      H0: hubble constant in Mpc^-1 units
+      Hs: hubble parameter H(z) for all zs points
+
     Methods:
       __init__
       getPars: gets camb parameters object
@@ -118,7 +124,8 @@ class matterPower:
     """
     # set cosmological parameters
     self.cosParams = {
-        'H0'    : None, #67.51,
+        #'H0'    : 67.51,
+        'H0'    : None,
         'cosmomc_theta'           : 1.04087e-2,
         'ombh2' : 0.02226,
         'omch2' : 0.1193,
@@ -240,6 +247,7 @@ class matterPower:
     self.chistar = results.conformal_time(0)- model.tau_maxvis.value
     self.chis = np.linspace(0,self.chistar,nz)
     self.zs=results.redshift_at_comoving_radial_distance(self.chis)
+    self.zstar = self.zs[-1]
     #Calculate array of delta_chi, and drop first and last points where things go singular
     self.dchis = (self.chis[2:]-self.chis[:-2])/2 #overkill since chis are evenly spaced
     self.dzs   = (  self.zs[2:]-  self.zs[:-2])/2 #not as nice as with chi since zs not evenly spaced
@@ -251,7 +259,14 @@ class matterPower:
     #Here for lensing we want the power spectrum of the Weyl potential.
     self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
         hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
-        var1=myVar,var2=myVar, zmax=self.zs[-1])
+        var1=myVar,var2=myVar, zmax=self.zstar) #self.zs[-1])
+
+    #Get H(z) values (in Mpc^-1 units)
+    #print 'calculating H(z) at each z...'
+    self.Hs = np.empty(nz-2)
+    self.H0 = results.h_of_z(0)
+    for zIndex, z in enumerate(self.zs):
+      self.Hs[zIndex] = results.h_of_z(z)
 
 
   def getPKinterp(self):
@@ -838,7 +853,8 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
 
   # get dz/dchi as ratio of deltaz/deltachi
   #  why not calculate as 1/H(z)?
-  dzdchi = dzs/dchis
+  #dzdchi = dzs/dchis
+  dzdchi = 1/myPk.Hs
 
   # extend Z range for smoothing
   extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)
@@ -892,7 +908,8 @@ def winKappa(myPk,biases=None):
   # Get lensing window function (flat universe)
   lightspeed = 2.99792458e5 # km/s
   myH0 = pars.H0/lightspeed # get H0 in Mpc^-1 units
-  myOmegaM = pars.omegab+pars.omegac #baryonic+cdm
+  #myOmegaM = pars.omegab+pars.omegac #baryonic+cdm
+  myOmegaM = pars.omegab+pars.omegac+pars.omegan #baryonic+cdm+neutrino
   myAs = 1/(1.+zs) #should have same indices as chis
   winK = chis*((chistar-chis)/(chistar*myAs))*biases
   winK *= (1.5*myOmegaM*myH0**2)
@@ -1135,7 +1152,7 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
 
 
 def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaBin,
-          dndzMode=1,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
+          dndzMode=2,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
           z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True):
   """
     Purpose: get angular power spectrum
@@ -1148,6 +1165,7 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaB
       winfunc1,winfunc2: the window functions
         should be winKappaBin or winGalaxies
       dndzMode: select which dNdz scheme to use for winfuncs
+        Default: 2
       binNum1,binNum2: index indicating which bin to use
         If dndzMode = 1:
           integer in {0,1,2,3,4,5}
@@ -1208,17 +1226,17 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaB
 
   #Do integral over chi
   ls = np.arange(2,lmax+1, dtype=np.float64)
-  cl_kappa=np.zeros(ls.shape)
+  cl = np.zeros(ls.shape)
   w = np.ones(chis.shape) #this is just used to set to zero k values out of range of interpolation
   for i, l in enumerate(ls):
       k=(l+0.5)/chis
       w[:]=1
       w[k<1e-4]=0
       w[k>=myPk.kmax]=0
-      cl_kappa[i] = np.dot(dchis, w*PK.P(zs, k, grid=False)*win1*win2/(chis**2))
+      cl[i] = np.dot(dchis, w*PK.P(zs, k, grid=False)*win1*win2/(chis**2))
 
-  #print 'ls: ',ls,', Cl: ',cl_kappa
-  return ls, cl_kappa
+  #print 'ls: ',ls,', Cl: ',cl
+  return ls, cl
 
 
 
