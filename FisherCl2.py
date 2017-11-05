@@ -12,6 +12,8 @@
     FisherCl2 spun off from FisherCl; ZK, 2017.10.16
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
     Added H0,Hs,zs to FisherMatrix object; ZK, 2017.10.20
+    Converted biases arrays to functions for compatibility with updated
+      getCl function; ZK, 2017.10.27
 
 """
 
@@ -52,7 +54,7 @@ class FisherMatrix:
 
   def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               **cos_kwargs):
+               noAs=True,**cos_kwargs):
     """
     
       Inputs:
@@ -73,6 +75,7 @@ class FisherMatrix:
             Defalut: False
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
+        noAs = True: does nothing.  Just here for backwards compatibility.
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -148,6 +151,10 @@ class FisherMatrix:
     self.H0 = pars.H0
     self.Hs = myPk.Hs
     self.zs = myPk.zs
+    self.zstar = myPk.zstar
+
+    # extend zs range for interpolation functions
+    zs = np.hstack(([0],zs,self.zstar))
 
     # get bucketloads more of them for numeric differentiation
     print 'creating more matter power objects...'
@@ -233,7 +240,7 @@ class FisherMatrix:
 ################################################################################
     # get all cross power spectra
 
-    # transfer binBs,binAs to biases1,biases2 arrays
+    # transfer binBs,binAs to biases1,biases2 functions
     # If I use AOfZ not all 1, this needs to be changed to include summation over bins for kk
 
     self.crossCls      = np.zeros((nMaps,nMaps,           lmax-1)) #-1 to omit ell=1
@@ -245,21 +252,41 @@ class FisherMatrix:
     for map1 in range(nMaps):
       if map1==0:
         winfunc1 = cp.winKappaBin
-        biases1=np.ones(zs.size)*binAs[map1-1]
+        #biases1=np.ones(zs.size)*binAs[map1-1]
+        biases1=None
       else:
         winfunc1 = cp.winGalaxies
-        biases1=np.ones(zs.size)*binBs[map1-1]*binAs[map1-1]  # -1 since nMaps=nBins+1
+        #biases1=np.ones(zs.size)*binBs[map1-1]*binAs[map1-1]  # -1 since nMaps=nBins+1
+        biases1=bOfZfit()
       for map2 in range(map1,nMaps):
         print 'starting angular cross power spectrum ',map1,', ',map2,'... '
         if map2==0:
           winfunc2 = cp.winKappaBin
-          biases2=np.ones(zs.size)*binAs[map2-1]
+          #biases2=np.ones(zs.size)*binAs[map2-1]
+          biases2=None
         else:
           winfunc2 = cp.winGalaxies
-          biases2=np.ones(zs.size)*binBs[map2-1]*binAs[map2-1]  # -1 since nMaps=nBins+1
+          #biases2=np.ones(zs.size)*binBs[map2-1]*binAs[map2-1]  # -1 since nMaps=nBins+1
+          biases2=bOfZfit()
+
+        """
+        # convert biases arrays to functions
+        biases1 = interp1d(zs,biases1,kind='linear')
+        biases2 = interp1d(zs,biases2,kind='linear')
+        # actually ditch all that and go straight to the source:
+        if winfunc1 == cp.winKappaBin:
+          biases1 = None
+        else:
+          biases1 = bOfZfit()
+        if winfunc2 == cp.winKappaBin:
+          biases1 = None
+        else:
+          biases1 = bOfZfit()
+        """
+
         # since nonoverlapping bins have zero correlation use this condition:
         if map1==0 or map1==map2 or not tophatBins:
-          ells,Cls = cp.getCl(myPk,biases1=biases1,biases2=biases2,
+          ells,Cls = cp.getCl(myPk,biasFunc1=biases1,biasFunc2=biases2,
               winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
               dndzMode=dndzMode,binNum1=map1,binNum2=map2,
               lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
@@ -270,7 +297,7 @@ class FisherMatrix:
           # now the adjustments for numeric derivatives
           for cParamNum in range(nCosParams):
             ells,Cls = cp.getCl(myPksUpper[cParamNum],
-                biases1=biases1,biases2=biases2,
+                biasFunc1=biases1,biasFunc2=biases2,
                 winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
                 dndzMode=dndzMode,binNum1=map1,binNum2=map2,
                 lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
@@ -278,7 +305,7 @@ class FisherMatrix:
             self.crossClsPlus[map1,map2,cParamNum] = Cls
             self.crossClsPlus[map2,map1,cParamNum] = Cls #symmetric
             ells,Cls = cp.getCl(myPksLower[cParamNum],
-                biases1=biases1,biases2=biases2,
+                biasFunc1=biases1,biasFunc2=biases2,
                 winfunc1=winfunc1,winfunc2=winfunc2,BPZ=BPZ,
                 dndzMode=dndzMode,binNum1=map1,binNum2=map2,
                 lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
@@ -301,10 +328,19 @@ class FisherMatrix:
       for bin2 in range(bin1,nBins):
         if bin1==bin2 or not tophatBins:
           print 'starting angular cross power spectrum ',bin1,', ',bin2,'... '
-          biasesKi = np.ones(zs.size)*binAs[bin1]
-          biasesGi = np.ones(zs.size)*binBs[bin2]*binAs[bin2]
+
+          # get biases
+          #biasesKi = np.ones(zs.size)*binAs[bin1]
+          #biasesGi = np.ones(zs.size)*binBs[bin2]*binAs[bin2]
+          # convert biases arrays to functions
+          #biasesKi = interp1d(zs,biasesKi,kind='linear')
+          #biasesGi = interp1d(zs,biasesGi,kind='linear')
+          # actually, ditch all that and go straight to the source
+          biasesKi = None
+          biasesGi = bOfZfit()
+
           # kk
-          ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesKi,
+          ells,Cls = cp.getCl(myPk,biasFunc1=biasesKi,biasFunc2=biasesKi,
               winfunc1=cp.winKappaBin,winfunc2=cp.winKappaBin,BPZ=BPZ,
               dndzMode=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
@@ -312,7 +348,7 @@ class FisherMatrix:
           self.crossClBinsKK[bin1,bin2] = Cls
           self.crossClBinsKK[bin2,bin1] = Cls #symmetric
           # kg
-          ells,Cls = cp.getCl(myPk,biases1=biasesKi,biases2=biasesGi,
+          ells,Cls = cp.getCl(myPk,biasFunc1=biasesKi,biasFunc2=biasesGi,
               winfunc1=cp.winKappaBin,winfunc2=cp.winGalaxies,BPZ=BPZ,
               dndzMode=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,
@@ -320,7 +356,7 @@ class FisherMatrix:
           self.crossClBinsKG[bin1,bin2] = Cls
           self.crossClBinsKG[bin2,bin1] = Cls #symmetric
           # gg
-          ells,Cls = cp.getCl(myPk,biases1=biasesGi,biases2=biasesGi,
+          ells,Cls = cp.getCl(myPk,biasFunc1=biasesGi,biasFunc2=biasesGi,
               winfunc1=cp.winGalaxies,winfunc2=cp.winGalaxies,BPZ=BPZ,
               dndzMode=dndzMode,binNum1=bin1+1,binNum2=bin2+1,
               lmax=lmax,zmin=zmin,zmax=zmax,nBins=nBins,z0=z0,doNorm=doNorm,

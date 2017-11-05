@@ -43,6 +43,10 @@
     Added H0, Hs fields to matterPower; ZK, 2017.10.20
     Added omega_n to omega_m sum in winKappa; ZK, 2017.10.23
     Changed matter power interpolator zmax to zstar; ZK, 2017.10.24
+    Refactored getCl to use quad for 'better' integration; 
+      replaced biases arrays with biasFunc functions: this breaks
+      backwards compatibiliy!  ZK, 2017.10.25
+    Replaced normBin with normBinQuad for 'better' int; ZK, 2017.10.27
 
 """
 
@@ -54,6 +58,7 @@ from scipy.interpolate import interp1d
 import camb
 from camb import model, initialpower
 from scipy import polyfit,poly1d
+from scipy.integrate import quad
 
 
 ################################################################################
@@ -267,6 +272,7 @@ class matterPower:
     self.H0 = results.h_of_z(0)
     for zIndex, z in enumerate(self.zs):
       self.Hs[zIndex] = results.h_of_z(z)
+    self.Hstar = results.h_of_z(self.zstar)
 
 
   def getPKinterp(self):
@@ -285,6 +291,33 @@ class matterPower:
 
     return self.PK,self.chistar,self.chis,self.dchis,self.zs,self.dzs,self.pars
 
+
+  def getChiofZ(self,kind='quadratic'):
+    """
+      get a chi(z) interpolator
+      inputs:
+        kind: kind of interpolation
+      returns:
+        function chi(z)
+    """
+    zs = np.hstack((  [0],self.zs,  self.zstar))
+    chis = np.hstack(([0],self.chis,self.chistar))
+
+    return interp1d(zs,chis,kind=kind)
+
+
+  def getHofZ(self,kind='quadratic'):
+    """
+      get an H(z) interpolator
+      inputs:
+        kind: kind of interpolation
+      returns:
+        function H(z)
+    """
+    zs = np.hstack((    [0],self.zs,self.zstar))
+    Hs = np.hstack((self.H0,self.Hs,self.Hstar))
+
+    return interp1d(zs,Hs,kind=kind)
 
 
 
@@ -533,6 +566,36 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False):
   return myFofZ
 
 
+def normBinQuad(FofZ,binZmin,binZmax,verbose=False,
+                epsrel=1.49e-5,epsabs=0,returnError=False):
+  """
+    rewrite of normBin to do quadrature integration using quad
+
+    Purpose:
+      find normalization factor for a function with a redshift bin
+    Note:
+      Left bin edges are used for bin height when normalizing
+    Inputs:
+      FofZ: a function of redshift, z, to be normalized
+      binZmin, binZmax: redshift min, max for normalization range
+      verbose=False: set to true to have more output
+      epsrel,epsabs: relative and absolute error margins to pass to quad
+          whichever one is attained first ends the integration
+      returnError: set to True to return error with other values
+
+    Returns:
+      normalization factor
+
+  """
+  if verbose: print 'normalizing bin... '
+  area,error = quad(FofZ,binZmin,binZmax,epsrel=epsrel,epsabs=epsabs)
+
+  if returnError:
+    return 1./area, error
+  else:
+    return 1./area
+
+
 def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
   """
     Purpose:
@@ -572,7 +635,6 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
   # get interval widths: spacing between 
   deltaZs = manyZs-np.roll(manyZs,1)
   
-  
   # ditch endpoint residuals
   if binZmin in zs:
     deltaZs = deltaZs[1:]
@@ -592,11 +654,6 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
     myF = myF[1:]
   if binZmax not in zs:
     myF = myF[:-1]
-
-
-
-  # interpret redshifts as bin centers; ditch first and last z
-  #myF = myF[1:-1]
 
   if verbose: print 'myF: ',myF
 
@@ -676,7 +733,8 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
   binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
 
   # get normalization factor
-  normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,verbose=verbose)
+  #normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,verbose=verbose)
+  normFac = normBinQuad(rawDNDZ,binZmin,binZmax)
 
   # get non-normalized DNDZ
   binDNDZ = rawDNDZ(zs[binIndices])
@@ -805,7 +863,8 @@ def gSmooth(zs,FofZ,binSmooth,numSigmas=3):
 
 def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
                 binNum=0,zmin=0.0,zmax=4.0,nBins=10,z0=0.3,
-                doNorm=True,useWk=False,binSmooth=0):
+                doNorm=True,useWk=False,binSmooth=0,
+                interpOnly=False,zs=None):
   """
     window function for galaxy distribution
     Inputs:
@@ -835,14 +894,29 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
           Defalut: False
         binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
           Default: 0 (no smoothing)
+      interpOlny: set to True to return interpolation function.
+        otherwise, array evaluated at zs will be returned.
+        Default: False
+      zs: optional array of z values to evaluate winKappa at.  
+        If not specified or is None, myPk.zs will be used.
     Returns:
       array of W^galaxies values evaluated at input myPk.chis values
   """
   # get redshift array, etc.
-  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+  #PK,chistar,pkChis,dchis,pkZs,dzs,pars = myPk.getPKinterp()
 
+  if zs is None:
+    zs   = myPk.zs
+    chis = myPk.chis
+    Hs   = myPk.Hs
+  else:
+    chiofZ = myPk.getChiofZ()
+    chis = chiofZ(zs)
+    HofZ = myPk.getHofZ()
+    Hs   = HofZ(zs)
   if biases is None:
     biases = np.ones(zs.size)
+
   if dndzMode != 1 and dndzMode != 2:
     print 'wrong dNdz mode selected.'
     return 0
@@ -854,7 +928,7 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
   # get dz/dchi as ratio of deltaz/deltachi
   #  why not calculate as 1/H(z)?
   #dzdchi = dzs/dchis
-  dzdchi = 1/myPk.Hs
+  dzdchi = 1/Hs
 
   # extend Z range for smoothing
   extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)
@@ -885,23 +959,35 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
       myDNDZ = rawDNDZ(zs) 
 
 
-  return dzdchi*myDNDZ*biases
+  winGal = dzdchi*myDNDZ*biases
+  if interpOnly:
+    return interp1d(zs,winGal,kind='quadratic')
+  else:
+    return winGal
 
 
-def winKappa(myPk,biases=None):
+def winKappa(myPk,biases=None,zs=None):
   """
     window function for CMB lensing convergence
     Inputs:
       myPk: MatterPower object
       biases: amplitude of lensing, array corresponding to zs values
         default: all equal to 1
+      zs: optional array of z values to evaluate winKappa at.  
+        If not specified or is None, myPk.zs will be used.
     Returns:
       array of W^kappa values evaluated at input myPk.chis
       should cover slightly larger region than bin of interest for full interpolation
   """
   # get redshift array, etc.
-  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+  PK,chistar,pkChis,dchis,pkZs,dzs,pars = myPk.getPKinterp()
 
+  if zs is None:
+    zs = pkZs
+    chis = pkChis
+  else:
+    chiOfZ = myPk.getChiofZ()
+    chis = chiOfZ(zs)
   if biases is None:
     biases = np.ones(zs.size)
 
@@ -918,7 +1004,7 @@ def winKappa(myPk,biases=None):
 
 
 def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
-                  dndzMode=2,binSmooth=0):
+                  dndzMode=2,binSmooth=0,kind='quadratic',zs=None):
   """
     Purpose:
       get interpolation function for winKappa(z)
@@ -941,16 +1027,22 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
           Defaults: 0,4
       binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
         Default: 0 (no smoothing)
+      kind: the kind of interpolation (passed on to interp1d)
+        Default: 'quadratic'
+      zs: optional array of z values to evaluate winKappa at.  
+        If not specified or is None, myPk.zs will be used.
     Returns:
       function for interpolating winKappa(z) result
   """
   # get CMB lensing window
-  winK = winKappa(myPk,biases=biases)
-  zs = myPk.zs
+  winK = winKappa(myPk,biases=biases,zs=zs)
+  if zs == None:
+    zs = myPk.zs
 
   # insert (0,0) at beginning
-  zs = np.insert(zs,0,0)
-  winK = np.insert(winK,0,0)
+  if 0 not in zs:
+    zs = np.insert(zs,0,0)
+    winK = np.insert(winK,0,0)
 
   # slice out the bin of interest
   if dndzMode == 1: # use observational dndz
@@ -972,25 +1064,28 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
         winK[notBinIndices] = 0
   elif dndzMode == 2: # use dndz model
     if binNum != 0:
-      # add bin edges into array
+      # add bin edges into arrays if necessary
       binEdges =np.linspace(zmin,zmax,nBins+1)
       lowEdgeZ  = binEdges[binNum-1]
       highEdgeZ = binEdges[binNum]
-      winKinterp = interp1d(zs,winK,assume_sorted=True,kind='slinear')
-      lowEdgeWinK = winKinterp(lowEdgeZ)
-      highEdgeWinK = winKinterp(highEdgeZ)
-      if zs[0] >= lowEdgeZ:
-        indicesBelowBin = [[0,-1],[0,0]]
-      else:
-        indicesBelowBin = np.where(zs< lowEdgeZ)
-      if zs[-1] <= highEdgeZ:
-        indicesAboveBin = [[-1,0],[0,0]]
-      else:
-        indicesAboveBin = np.where(zs> highEdgeZ)
-      zs   = np.insert(zs,  indicesAboveBin[0][0],highEdgeZ)
-      winK = np.insert(winK,indicesAboveBin[0][0],highEdgeWinK)
-      zs   = np.insert(zs,  indicesBelowBin[0][-1]+1,lowEdgeZ)
-      winK = np.insert(winK,indicesBelowBin[0][-1]+1,lowEdgeWinK)
+      if highEdgeZ not in zs:
+        winKinterp = interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
+        highEdgeWinK = winKinterp(highEdgeZ)
+        if zs[-1] <= highEdgeZ:
+          indicesAboveBin = [[-1,0],[0,0]]
+        else:
+          indicesAboveBin = np.where(zs> highEdgeZ)
+        zs   = np.insert(zs,  indicesAboveBin[0][0],highEdgeZ)
+        winK = np.insert(winK,indicesAboveBin[0][0],highEdgeWinK)
+      if lowEdgeZ not in zs:
+        winKinterp = interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
+        lowEdgeWinK = winKinterp(lowEdgeZ)
+        if zs[0] >= lowEdgeZ:
+          indicesBelowBin = [[0,-1],[0,0]]
+        else:
+          indicesBelowBin = np.where(zs< lowEdgeZ)
+        zs   = np.insert(zs,  indicesBelowBin[0][-1]+1,lowEdgeZ)
+        winK = np.insert(winK,indicesBelowBin[0][-1]+1,lowEdgeWinK)
 
     # create tophat bin
     winK = tophat(winK,zs,zmin,zmax,nBins,binNum)
@@ -1003,12 +1098,12 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   if binSmooth != 0 and dndzMode == 2:
     winK = gSmooth(zs,winK,binSmooth)
 
-  return interp1d(zs,winK,assume_sorted=True,kind='slinear')
+  return interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
 
 
 
 def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
-                dndzMode=2,binSmooth=0,**kwargs):
+                dndzMode=2,binSmooth=0,interpOnly=False,zs=None,**kwargs):
   """
     Purpose:
       get one bin from CMB lensing kernel
@@ -1033,6 +1128,11 @@ def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
           Defaults: 0,4
         binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
           Default: 0 (no smoothing)
+      interpOlny: set to True to return interpolation function.
+        otherwise, array evaluated at zs will be returned.
+        Default: False
+      zs: optional array of z values to evaluate winKappa at.  
+        If not specified or is None, myPk.zs will be used.
       **kwargs: place holder so that winKappaBin and winGalaxies can have
         same parameter list
     Returns:
@@ -1044,13 +1144,21 @@ def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   zmax += extraZ
   nBins += extraBins
 
+  # get zs
+  if zs == None:
+    zs = myPk.zs
+
   # get Wk(z)
   rawWinK = getWinKinterp(myPk,biases=biases,binNum=binNum,zmin=zmin,zmax=zmax,
-                          nBins=nBins,dndzMode=dndzMode,binSmooth=binSmooth,BPZ=BPZ)
-  # evaluate at target redshifts
-  myWinK = rawWinK(myPk.zs)
+                          nBins=nBins,dndzMode=dndzMode,binSmooth=binSmooth,
+                          BPZ=BPZ,zs=zs)
 
-  return myWinK
+  if interpOnly:
+    return rawWinK
+  else:
+    # evaluate at target redshifts
+    myWinK = rawWinK(zs)
+    return myWinK
 
 
 def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
@@ -1128,7 +1236,8 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
   binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
 
   # get normalization factor
-  normFac = normBin(rawWinK,binZmin,binZmax,zs[binIndices],normPoints,verbose=verbose)
+  #normFac = normBin(rawWinK,binZmin,binZmax,zs[binIndices],normPoints,verbose=verbose)
+  normFac = normBinQuad(rawWinK,binZmin,binZmax)
 
   # get non-normalized winK  
   binWinK = rawWinK(zs[binIndices])
@@ -1150,20 +1259,87 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
 ################################################################################
 # the angular power spectrum
 
+    
+def getCl_int(myPk,zmin=0.0,zmax=4.0,biasFunc1=None,biasFunc2=None,
+              winfunc1=winKappaBin,winfunc2=winKappaBin,
+              dndzMode=2,binNum1=0,binNum2=0,nBins=10,zRes=5000,
+              z0=0.3,doNorm=True,useWk=False,BPZ=True):
+  """
+    the integrand for the getSimpleCl integral
 
-def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaBin,
+    inputs:
+      myPk: a matterPower object
+      zmin,zmax: minimum,maximum of integration range for C_l integral
+      zRes: number of points to use in creating window function interpolators
+        Default: 5000
+      ... see getCl for full list ...
+    returns:
+      a function of redshift z, frequency ell: f(z,l)
+      will evaluate to zero outside of zmin,zmax range
+      also zero outside of k(chi(z)) kmin,kmax range
+  """
+  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+  chiOfZ = myPk.getChiofZ()
+  myK = lambda z,ell: (ell+0.5)/chiOfZ(z)
+  def wOfKZ(z,k,zmin,zmax,kmin=1e-4,kmax=myPk.kmax):
+    if k < kmin:  return 0
+    if k >= kmax: return 0
+    if z < zmin:  return 0
+    if z > zmax:  return 0
+    return 1
+  
+  # select zs for creating window interpolators
+  #if winfunc1 == winKappaBin and winfunc2 == winKappaBin:
+  #  zmin = 0.0
+  #  zmax = myPk.zstar
+  zs = np.linspace(zmin,zmax,zRes)
+  
+  # get biases
+  if biasFunc1 == None:
+    biases1 = None
+  else:
+    biases1 = biasFunc1(zs)
+  if biasFunc2 == None:
+    biases2 = None
+  else:
+    biases2 = biasFunc2(zs)
+
+  # get window functions
+  # note that winKappaBin will ignore extra keywords due to use of **kwargs 
+  win1=winfunc1(myPk,biases=biases1,z0=z0,dndzMode=dndzMode,binNum=binNum1,
+              zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
+              BPZ=BPZ,interpOnly=True,zs=zs)
+  if winfunc1 == winfunc2 and binNum1 == binNum2 and biasFunc1 == biasFunc2:
+    win2 = win1
+  else:
+    win2=winfunc2(myPk,biases=biases2,z0=z0,dndzMode=dndzMode,binNum=binNum2,
+              zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
+              BPZ=BPZ,interpOnly=True,zs=zs)
+ 
+  # put the pieces together
+  integrandFunction = lambda z,ell: wOfKZ(z,myK(z,ell),zmin,zmax) * \
+                      PK.P(z,myK(z,ell)) *win1(z)*win2(z) / (chiOfZ(z)*chiOfZ(z))
+  
+  return integrandFunction
+
+
+# need to change all getCl calls:  use biasFunc instead of biases
+# all bias functions need to specify whether they're A or bA bias funcs.
+def getCl(myPk,biasFunc1=None,biasFunc2=None,winfunc1=winKappaBin,winfunc2=winKappaBin,
           dndzMode=2,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
-          z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True):
+          z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True,zRes=5000,
+          epsrel=1.49e-4,epsabs=0,returnError=False):
   """
     Purpose: get angular power spectrum
     Inputs:
       myPk: a matterPower object
-      biases1,biases2: array of matter amplitude (A) or 
-        galaxy bias * matter amplitude (bA) at each redshift in myPk.zs, 
+      biasFunc1,biasFunc2: name of matter amplitude (A) or 
+        galaxy bias * matter amplitude (bA) function to be evaluated, 
         depending on which winfunc is selected
         default: None; indicates that all biases equal to 1
       winfunc1,winfunc2: the window functions
         should be winKappaBin or winGalaxies
+        if both are winKappaBin then zmin,zmax will be 0,zstar
       dndzMode: select which dNdz scheme to use for winfuncs
         Default: 2
       binNum1,binNum2: index indicating which bin to use
@@ -1187,9 +1363,17 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaB
           Defalut: False
         binSmooth: parameter that controls the amount of smoothing of bin edges
           Default: 0 (no smoothing)
+      epsrel,epsabs: relative and absolute error margins to pass to quad
+          whichever one is attained first ends the integration
+      returnError: set to True to return error with other values
+      zRes: number of points to use in creating window function interpolators
+        Default: 5000
     Returns: 
-      l,  the ell values (same length as Cl array)
-      Cl, the power spectrum array
+      if returnError == False: ell,cl
+        ell: the ell values (same length as Cl array)
+        Cl:  the power spectrum array
+      if returnError == True: ell,cl,err
+        err: the quad-computed error values on cl values
   """
 
   # confirm inputs
@@ -1211,32 +1395,38 @@ def getCl(myPk,biases1=None,biases2=None,winfunc1=winKappaBin,winfunc2=winKappaB
   
   if wincheck(winfunc1,1)==0: return 0,0
   if wincheck(winfunc2,2)==0: return 0,0
+
+  # adjust integration range for kappa-kappa
+  if winfunc1 == winKappaBin and winfunc2 == winKappaBin:
+    zmin = 0
+    zmax = myPk.zstar
   
-  # get matter power spectrum P_k^delta
-  PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
+  elif binSmooth != 0:
+    # extend Z range for smoothing
+    extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)
+    zmax += extraZ
+    nBins += extraBins
+  
+  # set up arrays to return
+  ls  = np.arange(2,lmax+1, dtype=np.float64)
+  cl  = np.zeros(ls.shape)
+  err = np.zeros(ls.shape)
+  
+  # get integrand
+  integrandOfZL = getCl_int(myPk,biasFunc1=biasFunc1,biasFunc2=biasFunc2,z0=z0,
+                            dndzMode=dndzMode,binNum1=binNum1,binNum2=binNum2,
+                            zmin=zmin,zmax=zmax,nBins=nBins,BPZ=BPZ,
+                            doNorm=doNorm,useWk=useWk,zRes=zRes)
 
-  # get window functions
-  # note that winKappaBin will ignore extra keywords due to use of **kwargs 
-  win1=winfunc1(myPk,biases=biases1,z0=z0,dndzMode=dndzMode,binNum=binNum1,
-                zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
-                binSmooth=binSmooth,BPZ=BPZ)
-  win2=winfunc2(myPk,biases=biases2,z0=z0,dndzMode=dndzMode,binNum=binNum2,
-                zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,useWk=useWk,
-                binSmooth=binSmooth,BPZ=BPZ)
-
-  #Do integral over chi
-  ls = np.arange(2,lmax+1, dtype=np.float64)
-  cl = np.zeros(ls.shape)
-  w = np.ones(chis.shape) #this is just used to set to zero k values out of range of interpolation
-  for i, l in enumerate(ls):
-      k=(l+0.5)/chis
-      w[:]=1
-      w[k<1e-4]=0
-      w[k>=myPk.kmax]=0
-      cl[i] = np.dot(dchis, w*PK.P(zs, k, grid=False)*win1*win2/(chis**2))
-
-  #print 'ls: ',ls,', Cl: ',cl
-  return ls, cl
+  # do the integration
+  for i, ell in enumerate(ls):
+    #print 'starting quad integral at ell = ',ell,'... '
+    cl[i],err[i] = quad(integrandOfZL,zmin,zmax,ell,epsabs=epsabs,epsrel=epsrel)
+  
+  if returnError:
+    return ls, cl, err
+  else:
+    return ls, cl
 
 
 
@@ -1417,17 +1607,21 @@ def plotKG(myPk,biasesK=None,biasesG=None,lmax=2500,
       binSmooth:
 
   """
-  ls1, Cl1 = getCl(myPk,biases1=biasesK,biases2=biasesK,winfunc1=winKappaBin,   winfunc2=winKappaBin,
+  ls1, Cl1 = getCl(myPk,biasFunc1=biasesK,biasFunc2=biasesK,
+                   winfunc1=winKappaBin,winfunc2=winKappaBin,
                    doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
-  ls2, Cl2 = getCl(myPk,biases1=biasesK,biases2=biasesG,winfunc1=winKappaBin,   winfunc2=winGalaxies, 
+  ls2, Cl2 = getCl(myPk,biasFunc1=biasesK,biasFunc2=biasesG,
+                   winfunc1=winKappaBin,winfunc2=winGalaxies, 
                    dndzMode=dndzMode,               binNum2=binNum,
                    zmax=zmax,nBins=nBins,z0=z0,
                    doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
-  #ls3, Cl3 = getCl(myPk,biases1=biasesG,biases2=biasesK,winfunc1=winGalaxies,winfunc2=winKappaBin,   
+  #ls3, Cl3 = getCl(myPk,biasFunc1=biasesG,biasFunc2=biasesK,
+  #                 winfunc1=winGalaxies,winfunc2=winKappaBin,   
   #                 dndzMode=dndzMode,binNum1=binNnum,
   #                 zmax=zmax,nBins=nBins,z0=z0,
   #                 doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
-  ls4, Cl4 = getCl(myPk,biases1=biasesG,biases2=biasesG,winfunc1=winGalaxies,winfunc2=winGalaxies,
+  ls4, Cl4 = getCl(myPk,biasFunc1=biasesG,biasFunc2=biasesG,
+                   winfunc1=winGalaxies,winfunc2=winGalaxies,
                    dndzMode=dndzMode,binNum1=binNum,binNum2=binNum,
                    zmax=zmax,nBins=nBins,z0=z0,
                    doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)  
@@ -1462,7 +1656,7 @@ def plotGG(myPk,biases1=None,biases2=None,lmax=2000,
   for i in range(1,6):
     for j in range(i,6):
       print 'starting g_',i,' g_',j
-      ls,Cl = getCl(myPk,biases1=biases1,biases2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=i,binNum2=j,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
+      ls,Cl = getCl(myPk,biasFunc1=biases1,biasFunc2=biases2,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=i,binNum2=j,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
       plt.semilogy(ls,Cl,label='g_'+str(i)+', g_'+str(j))
   plt.xlim(0,lmax)
   plt.xlabel(r'$\ell$')
@@ -1486,7 +1680,7 @@ def plotGGsum(myPk,biases=None,doNorm=True,useWk=False,binSmooth=0):
     binSmooth:
 
   """
-  ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
+  ls,Cl = getCl(myPk,biasFunc1=biases,biasFunc2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
   plt.semilogy(ls,Cl)
   plt.title('C_l^gg for sum of all dNdz curves')
   plt.show()
