@@ -14,6 +14,7 @@
     Added H0,Hs,zs to FisherMatrix object; ZK, 2017.10.20
     Converted biases arrays to functions for compatibility with updated
       getCl function; ZK, 2017.10.27
+    Added option to use TT,TE,EE power spectra as observables; ZK 2017.10.30
 
 """
 
@@ -54,7 +55,7 @@ class FisherMatrix:
 
   def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               noAs=True,**cos_kwargs):
+               noAs=True,usePrimaryCMB=False,**cos_kwargs):
     """
     
       Inputs:
@@ -76,6 +77,9 @@ class FisherMatrix:
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
         noAs = True: does nothing.  Just here for backwards compatibility.
+        usePrimaryCMB = True: set to True to include TT,TE,EE observables.
+          Note: not yet implemented
+          Default: False
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -121,6 +125,7 @@ class FisherMatrix:
     self.zmax = zmax
     self.nBins = nBins
     self.z0 = z0
+    self.lmax = lmax
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
@@ -129,6 +134,8 @@ class FisherMatrix:
 
     # observables list: defined as self.obsList; created along with self.covar
     nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+    #if usePrimaryCMB:
+    #  nCls += 3 # for TT,TE,EE (no crosses with k,g)
 
     # parameters list:
     nCosParams = 7 # 6 LCDM + Mnu
@@ -168,7 +175,7 @@ class FisherMatrix:
       # add parameter dictionary to lists; HAVE TO BE COPIES!!!
       myParamsUpper.append(myParams.copy())
       myParamsLower.append(myParams.copy())
-      # modify parameter number cParamNum in ditionaries
+      # modify parameter number cParamNum in dictionaries
       myParamsUpper[cParamNum][paramList[cParamNum]] += deltaP[cParamNum]
       myParamsLower[cParamNum][paramList[cParamNum]] -= deltaP[cParamNum]
 
@@ -257,7 +264,7 @@ class FisherMatrix:
       else:
         winfunc1 = cp.winGalaxies
         #biases1=np.ones(zs.size)*binBs[map1-1]*binAs[map1-1]  # -1 since nMaps=nBins+1
-        biases1=bOfZfit()
+        biases1=bOfZfit
       for map2 in range(map1,nMaps):
         print 'starting angular cross power spectrum ',map1,', ',map2,'... '
         if map2==0:
@@ -267,7 +274,7 @@ class FisherMatrix:
         else:
           winfunc2 = cp.winGalaxies
           #biases2=np.ones(zs.size)*binBs[map2-1]*binAs[map2-1]  # -1 since nMaps=nBins+1
-          biases2=bOfZfit()
+          biases2=bOfZfit
 
         """
         # convert biases arrays to functions
@@ -277,11 +284,11 @@ class FisherMatrix:
         if winfunc1 == cp.winKappaBin:
           biases1 = None
         else:
-          biases1 = bOfZfit()
+          biases1 = bOfZfit
         if winfunc2 == cp.winKappaBin:
           biases1 = None
         else:
-          biases1 = bOfZfit()
+          biases1 = bOfZfit
         """
 
         # since nonoverlapping bins have zero correlation use this condition:
@@ -337,7 +344,7 @@ class FisherMatrix:
           #biasesGi = interp1d(zs,biasesGi,kind='linear')
           # actually, ditch all that and go straight to the source
           biasesKi = None
-          biasesGi = bOfZfit()
+          biasesGi = bOfZfit
 
           # kk
           ells,Cls = cp.getCl(myPk,biasFunc1=biasesKi,biasFunc2=biasesKi,

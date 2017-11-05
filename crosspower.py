@@ -462,7 +462,7 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=4.0,nZvals=100,dndzMode=2,
   if binSmooth != 0 and dndzMode == 2:
     myDNDZ = gSmooth(zs,myDNDZ,binSmooth)
 
-  return interp1d(zs,myDNDZ,assume_sorted=True,kind='slinear')#'quadratic')
+  return interp1d(zs,myDNDZ,assume_sorted=True,kind='slinear')
 
 
 
@@ -499,7 +499,7 @@ def getDNDZratio(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
   denVals[-1] = denVals[-2]
   ratioVals = numVals/denVals
 
-  return interp1d(myZvals,ratioVals,assume_sorted=True,kind='slinear')#'quadratic')
+  return interp1d(myZvals,ratioVals,assume_sorted=True,kind='slinear')
 
 
 def modelDNDZ(z,z0):
@@ -961,7 +961,7 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
 
   winGal = dzdchi*myDNDZ*biases
   if interpOnly:
-    return interp1d(zs,winGal,kind='quadratic')
+    return interp1d(zs,winGal,kind='slinear')
   else:
     return winGal
 
@@ -1004,7 +1004,7 @@ def winKappa(myPk,biases=None,zs=None):
 
 
 def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
-                  dndzMode=2,binSmooth=0,kind='quadratic',zs=None):
+                  dndzMode=2,binSmooth=0,zs=None):
   """
     Purpose:
       get interpolation function for winKappa(z)
@@ -1027,8 +1027,6 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
           Defaults: 0,4
       binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
         Default: 0 (no smoothing)
-      kind: the kind of interpolation (passed on to interp1d)
-        Default: 'quadratic'
       zs: optional array of z values to evaluate winKappa at.  
         If not specified or is None, myPk.zs will be used.
     Returns:
@@ -1069,7 +1067,7 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
       lowEdgeZ  = binEdges[binNum-1]
       highEdgeZ = binEdges[binNum]
       if highEdgeZ not in zs:
-        winKinterp = interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
+        winKinterp = interp1d(zs,winK,assume_sorted=True,kind='slinear')
         highEdgeWinK = winKinterp(highEdgeZ)
         if zs[-1] <= highEdgeZ:
           indicesAboveBin = [[-1,0],[0,0]]
@@ -1078,7 +1076,7 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
         zs   = np.insert(zs,  indicesAboveBin[0][0],highEdgeZ)
         winK = np.insert(winK,indicesAboveBin[0][0],highEdgeWinK)
       if lowEdgeZ not in zs:
-        winKinterp = interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
+        winKinterp = interp1d(zs,winK,assume_sorted=True,kind='slinear')
         lowEdgeWinK = winKinterp(lowEdgeZ)
         if zs[0] >= lowEdgeZ:
           indicesBelowBin = [[0,-1],[0,0]]
@@ -1098,7 +1096,7 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   if binSmooth != 0 and dndzMode == 2:
     winK = gSmooth(zs,winK,binSmooth)
 
-  return interp1d(zs,winK,assume_sorted=True,kind=kind)#'slinear')
+  return interp1d(zs,winK,assume_sorted=True,kind='slinear')
 
 
 
@@ -1328,7 +1326,7 @@ def getCl_int(myPk,zmin=0.0,zmax=4.0,biasFunc1=None,biasFunc2=None,
 def getCl(myPk,biasFunc1=None,biasFunc2=None,winfunc1=winKappaBin,winfunc2=winKappaBin,
           dndzMode=2,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
           z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True,zRes=5000,
-          epsrel=1.49e-4,epsabs=0,returnError=False):
+          epsrel=1.49e-2,epsabs=0,returnError=False):
   """
     Purpose: get angular power spectrum
     Inputs:
