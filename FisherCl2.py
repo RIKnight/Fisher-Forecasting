@@ -15,6 +15,11 @@
     Converted biases arrays to functions for compatibility with updated
       getCl function; ZK, 2017.10.27
     Added option to use TT,TE,EE power spectra as observables; ZK 2017.10.30
+    Commented out omch2 adjustment with mnu variation; ZK, 2017.11.12
+    Added AccuracyBoost to FisherMatrix; ZK, 2017.11.14
+    Removed redundant Cl calculation since Sigma_i W_i = W is enforced in 
+      crosspower.py, and A_i is fixed; 
+      Added dark energy e.o.s. param w to Fisher var.s; ZK, 2017.11.15
 
 """
 
@@ -55,7 +60,7 @@ class FisherMatrix:
 
   def __init__(self,nz=1000,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               noAs=True,usePrimaryCMB=False,**cos_kwargs):
+               noAs=True,usePrimaryCMB=False,AccuracyBoost=3,**cos_kwargs):
     """
     
       Inputs:
@@ -80,6 +85,9 @@ class FisherMatrix:
         usePrimaryCMB = True: set to True to include TT,TE,EE observables.
           Note: not yet implemented
           Default: False
+        AccuracyBoost: to pass to set_accuracy to set accuracy
+          Note that this sets accuracy globally, not just for this object
+          Default: 3
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -100,6 +108,8 @@ class FisherMatrix:
         'ns'    : 0.9653,
         'r'     : 0,
         'kPivot': 0.05,
+
+        'w'     : -1.0, # DARK ENERGY!!!
 
         # if fiducial mnu is changed, need to adjust omch2 as well
         'mnu'   : 0.06, # (eV)
@@ -126,6 +136,7 @@ class FisherMatrix:
     self.nBins = nBins
     self.z0 = z0
     self.lmax = lmax
+    self.AccuracyBoost=AccuracyBoost
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
@@ -138,9 +149,9 @@ class FisherMatrix:
     #  nCls += 3 # for TT,TE,EE (no crosses with k,g)
 
     # parameters list:
-    nCosParams = 7 # 6 LCDM + Mnu
+    nCosParams = 8 # 6 LCDM + Mnu + w
     nParams = nCosParams+nBins
-    paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu']
+    paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu','w']
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
     self.nParams   = nParams
@@ -148,11 +159,11 @@ class FisherMatrix:
 
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
-    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020] #last one in eV
+    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
 
     # get matter power object
     print 'creating matter power spectrum object...'
-    myPk = cp.matterPower(nz=nz,**self.cosParams)
+    myPk = cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
     #self.H0 = myPk.H0
     self.H0 = pars.H0
@@ -179,6 +190,8 @@ class FisherMatrix:
       myParamsUpper[cParamNum][paramList[cParamNum]] += deltaP[cParamNum]
       myParamsLower[cParamNum][paramList[cParamNum]] -= deltaP[cParamNum]
 
+      # after discussion we prefer not to use this for simplicity
+      """
       # check for mnu modification and adjust omch2 if necessary
       if paramList[cParamNum] == 'mnu':
         omch2Index = np.where(np.array(paramList) == 'omch2')[0][0]
@@ -187,6 +200,7 @@ class FisherMatrix:
         # note the -=,+= signs get reversed in next 2 lines compared to above
         myParamsUpper[cParamNum][paramList[omch2Index]] -= deltaOmnh2
         myParamsLower[cParamNum][paramList[omch2Index]] += deltaOmnh2
+      """
 
       #print 'cPramNum: ',cParamNum,', param name: ',paramList[cParamNum]
       #print 'myParamsUpper[cParamNum][paramList[cParamNum]]: ',myParamsUpper[cParamNum][paramList[cParamNum]]
@@ -194,8 +208,8 @@ class FisherMatrix:
       #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
 
       # create matter power objects and add to lists
-      myPksUpper.append(cp.matterPower(nz=nz,**myParamsUpper[cParamNum]))
-      myPksLower.append(cp.matterPower(nz=nz,**myParamsLower[cParamNum]))
+      myPksUpper.append(cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsUpper[cParamNum]))
+      myPksLower.append(cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsLower[cParamNum]))
 
     # save some of this
     self.myPk = myPk
@@ -322,6 +336,8 @@ class FisherMatrix:
             
     self.ells = ells
 
+    # this section needed for dCl/dAi or overlapping bins
+    """
     # divide K,G into bins and get crossClbins
     self.crossClBinsKK = np.zeros((nBins,nBins,lmax-1))
     self.crossClBinsKG = np.zeros((nBins,nBins,lmax-1))
@@ -370,6 +386,7 @@ class FisherMatrix:
               useWk=useWk,binSmooth=binSmooth)
           self.crossClBinsGG[bin1,bin2] = Cls
           self.crossClBinsGG[bin2,bin1] = Cls #symmetric
+    """
 
 
 ################################################################################
@@ -444,14 +461,16 @@ class FisherMatrix:
             else:                  #kg,gk
               # this section assumes no bin overlap (update later)
               if pIdx+1 == map2: # +1 since 1 more map than bin
-                self.dClVecs[  mapIdx, bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+                #self.dClVecs[  mapIdx, bi] = 1/binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 1/binBs[pIdx] * self.crossCls[0,pIdx+1]
               else: # parameter index does not match bin index
                 self.dClVecs[  mapIdx, bi] = Clzeros
 
           else: #galaxies          #gg
             if pIdx+1 == map2: # +1 since 1 more map than bin
               if map1 == map2:
-                self.dClVecs[  mapIdx, bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+                #self.dClVecs[  mapIdx, bi] = 2/binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 2/binBs[pIdx] * self.crossCls[pIdx+1,pIdx+1]
               else:
                 # this section assumes no bin overlap (update later)
                 self.dClVecs[  mapIdx ,bi] = Clzeros 

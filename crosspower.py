@@ -47,6 +47,9 @@
       replaced biases arrays with biasFunc functions: this breaks
       backwards compatibiliy!  ZK, 2017.10.25
     Replaced normBin with normBinQuad for 'better' int; ZK, 2017.10.27
+    Added AccuracyBoost to matterPower class; ZK, 2017.11.07
+    Fixed winfunc omission in new getCl version; ZK, 2017.11.12
+    Added dark energy w as parameter to matterPower, getPars; ZK, 2017.11.15
 
 """
 
@@ -111,8 +114,8 @@ class matterPower:
 
   """
 
-  def __init__(self,nz=1000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,
-               nonlinear=True,**cos_kwargs):
+  def __init__(self,nz=1000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,
+               nonlinear=True,AccuracyBoost=1,**cos_kwargs):
     """
     
       Inputs:
@@ -123,7 +126,11 @@ class matterPower:
         ns: "scalar spectral index"
         r: "tensor to scalar ratio at pivot"
         kPivot: "pivot scale for power spectrum"
+        w: the dark energy eos parameter
+          Default: -1
         nonlinear: set to True to use CAMB's non-linear correction from halo model
+        AccuracyBoost: to pass to set_accuracy to set accuracy
+          Note that this sets accuracy globally, not just for this object
         **cos_kwargs: the cosmological parameters for camb's set_cosmology
 
     """
@@ -148,6 +155,7 @@ class matterPower:
     self.r  = r
     self.kPivot = kPivot
     self.nonlinear=nonlinear
+    self.w = w
 
     # more parameters
     self.nz = nz # this will actually be 2 more than the number of z points
@@ -155,8 +163,9 @@ class matterPower:
     k_per_logint = None #100 # I really don't know what this will do
 
     # make the PK interpolator (via camb)
-    self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,kPivot=kPivot,
-                      k_per_logint=k_per_logint,nonlinear=nonlinear)
+    self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,w=w,
+                      kPivot=kPivot,k_per_logint=k_per_logint,nonlinear=nonlinear,
+                      AccuracyBoost=AccuracyBoost)
 
 
 
@@ -169,7 +178,8 @@ class matterPower:
     self.cosParams.update(cos_kwargs)
 
 
-  def getPars(self,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,**cos_kwargs):
+  def getPars(self,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,AccuracyBoost=1,
+              **cos_kwargs):
     """
       Purpose:
         quickly get camb parameters object
@@ -184,6 +194,10 @@ class matterPower:
           ns: "scalar spectral index"
           r: "tensor to scalar ratio at pivot"
           kPivot: "pivot scale for power spectrum"
+          w: the dark energy eos parameter
+            Default: -1
+          AccuracyBoost: to pass to set_accuracy to set accuracy
+            Note that this sets accuracy globally, not just for this object
         **cos_kwargs: keyword args to pass to set_cosmology 
           if not included, object defaults will be used
       Returns:
@@ -195,22 +209,19 @@ class matterPower:
 
     #Set up a new set of parameters for CAMB
     pars = camb.CAMBparams()
-    #This function sets up CosmoMC-like settings, with one massive neutrino and helium set using BBN consistency
-    #pars.set_cosmology(H0=67.5, ombh2=0.022, omch2=0.122, mnu=0.06, omk=0, tau=0.06) #why 0.122?
-    #pars.set_cosmology(H0=67.51, ombh2=0.022, omch2=0.119, mnu=0.06, omk=0, tau=0.06)
     pars.set_cosmology(**cosParams)
-    pars.set_dark_energy() #re-set defaults
+    pars.set_dark_energy(w)
     #pars.set_matter_power() # get_matter_power_interpolater does this
     pars.InitPower.set_params(As=As,ns=ns,r=r,pivot_scalar=kPivot)
 
-    #pars.set_accuracy(AccuracyBoost=2)
+    pars.set_accuracy(AccuracyBoost=AccuracyBoost)
 
     return pars
 
 
   def makePKinterp(self,newPk=True,nz=1000,kmax=10,As=2.130e-9,ns=0.9653,r=0,
-                   kPivot=0.05,myVar=model.Transfer_tot,k_per_logint=None,
-                   nonlinear=True,**cos_kwargs):
+                   kPivot=0.05,w=-1,myVar=model.Transfer_tot,k_per_logint=None,
+                   nonlinear=True,AccuracyBoost=1,**cos_kwargs):
     """
       example code from http://camb.readthedocs.io/en/latest/CAMBdemo.html
         (modified to have nz,kmax,myVar as inputs)
@@ -230,12 +241,16 @@ class matterPower:
         ns: "scalar spectral index"
         r: "tensor to scalar ratio at pivot"
         kPivot: "pivot scale for power spectrum"
+        w: the dark energy eos parameter
+          Default: -1
         myVar: the variable to get autopower spectrum of
           Default: model.Transfer_tot for delta_tot
         k_per_logint=None: to pass to get_matter_power_interpolater 
           which passes it to set_matter_power
         nonlinear: set to True to use CAMB's non-linear correction from halo model
           Default: True
+        AccuracyBoost: to pass to set_accuracy to set accuracy
+          Note that this sets accuracy globally, not just for this object
         **cos_kwargs: keyword args to pass to getPars and set_cosmology
           if not used, getPars will use object defaults
       Outputs:
@@ -244,7 +259,7 @@ class matterPower:
     """
     if newPk:
       self.updateParams(**cos_kwargs)
-      self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot)
+      self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot,w=w,AccuracyBoost=AccuracyBoost)
 
     #For Limber result, want integration over \chi (comoving radial distance), from 0 to chi_*.
     #so get background results to find chistar, set up arrage in chi, and calculate corresponding redshifts
@@ -302,6 +317,8 @@ class matterPower:
     """
     zs = np.hstack((  [0],self.zs,  self.zstar))
     chis = np.hstack(([0],self.chis,self.chistar))
+
+    #print 'Chi(z) zmax: ',zs[-1]
 
     return interp1d(zs,chis,kind=kind)
 
@@ -1034,8 +1051,11 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   """
   # get CMB lensing window
   winK = winKappa(myPk,biases=biases,zs=zs)
-  if zs == None:
+  if zs is None:
     zs = myPk.zs
+
+  # wtf checking
+  #print 'getWinKinterp: zmin = ',zmin,', zmax = ',zmax
 
   # insert (0,0) at beginning
   if 0 not in zs:
@@ -1067,6 +1087,7 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
       lowEdgeZ  = binEdges[binNum-1]
       highEdgeZ = binEdges[binNum]
       if highEdgeZ not in zs:
+        #print 'high edge...'
         winKinterp = interp1d(zs,winK,assume_sorted=True,kind='slinear')
         highEdgeWinK = winKinterp(highEdgeZ)
         if zs[-1] <= highEdgeZ:
@@ -1076,6 +1097,7 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
         zs   = np.insert(zs,  indicesAboveBin[0][0],highEdgeZ)
         winK = np.insert(winK,indicesAboveBin[0][0],highEdgeWinK)
       if lowEdgeZ not in zs:
+        #print 'low edge...'
         winKinterp = interp1d(zs,winK,assume_sorted=True,kind='slinear')
         lowEdgeWinK = winKinterp(lowEdgeZ)
         if zs[0] >= lowEdgeZ:
@@ -1129,7 +1151,7 @@ def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
       interpOlny: set to True to return interpolation function.
         otherwise, array evaluated at zs will be returned.
         Default: False
-      zs: optional array of z values to evaluate winKappa at.  
+      zs: optional numpy array of z values to evaluate winKappa at.  
         If not specified or is None, myPk.zs will be used.
       **kwargs: place holder so that winKappaBin and winGalaxies can have
         same parameter list
@@ -1143,7 +1165,7 @@ def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   nBins += extraBins
 
   # get zs
-  if zs == None:
+  if zs is None:
     zs = myPk.zs
 
   # get Wk(z)
@@ -1323,6 +1345,8 @@ def getCl_int(myPk,zmin=0.0,zmax=4.0,biasFunc1=None,biasFunc2=None,
 
 # need to change all getCl calls:  use biasFunc instead of biases
 # all bias functions need to specify whether they're A or bA bias funcs.
+# HOW ABOUT ANOTHER REFACTOR?  MAKE A WINDOWS OJBECT TO PASS TO getCl?
+#   HAVE IT HOLD ALL OF THE WINDOW STUFF EXCEPT FOR binNum1,binNum2?
 def getCl(myPk,biasFunc1=None,biasFunc2=None,winfunc1=winKappaBin,winfunc2=winKappaBin,
           dndzMode=2,binNum1=0,binNum2=0,lmax=2500,zmin=0.0,zmax=4.0,nBins=10,
           z0=0.3,doNorm=True,useWk=False,binSmooth=0,BPZ=True,zRes=5000,
@@ -1412,11 +1436,22 @@ def getCl(myPk,biasFunc1=None,biasFunc2=None,winfunc1=winKappaBin,winfunc2=winKa
   
   # get integrand
   integrandOfZL = getCl_int(myPk,biasFunc1=biasFunc1,biasFunc2=biasFunc2,z0=z0,
+                            winfunc1=winfunc1,winfunc2=winfunc2,
                             dndzMode=dndzMode,binNum1=binNum1,binNum2=binNum2,
                             zmin=zmin,zmax=zmax,nBins=nBins,BPZ=BPZ,
                             doNorm=doNorm,useWk=useWk,zRes=zRes)
 
   # do the integration
+  """
+  print 'zmin: ',zmin,', zmax: ',zmax
+  print 'pk(zmin,100): ',myPk.PK.P(zmin,100),', pk(zmax,100): ',myPk.PK.P(zmax,100)
+  chiOfZ = myPk.getChiofZ()
+  myK = lambda z,ell: (ell+0.5)/chiOfZ(z)
+  print 'chi(zmin): ',chiOfZ(zmin),', chi(zmax): ',chiOfZ(zmax)
+  print 'myK(zmin,2): ',myK(zmin,2),', myK(zmax, 2): ',myK(zmax,2)
+  print 'pk(zmin,myK(0,2)): ',myPk.PK.P(zmin,myK(0,2))
+  print 'pk(zmax,myK(0,2)): ',myPk.PK.P(zmax,myK(0,2))
+  """
   for i, ell in enumerate(ls):
     #print 'starting quad integral at ell = ',ell,'... '
     cl[i],err[i] = quad(integrandOfZL,zmin,zmax,ell,epsabs=epsabs,epsrel=epsrel)
