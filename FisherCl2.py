@@ -20,6 +20,7 @@
     Removed redundant Cl calculation since Sigma_i W_i = W is enforced in 
       crosspower.py, and A_i is fixed; 
       Added dark energy e.o.s. param w to Fisher var.s; ZK, 2017.11.15
+    Removed CLtools.  Planning on cosmicFish use later; ZK, 2017.11.25
 
 """
 
@@ -34,7 +35,7 @@ from scipy.interpolate import interp1d
 import crosspower as cp
 
 # Dan Coe's CLtools (confidence limit; c2009), for Fisher Matrix, etc.
-import CLtools as cl 
+#import CLtools as cl 
 
 ################################################################################
 # some functions
