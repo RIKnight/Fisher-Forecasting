@@ -46,6 +46,8 @@
 
     Branched off of master.  This version reverts to function getCl doing
       rough approximation to integration; ZK, 2017.12.13
+    Fixed dz/dchi problem in winGalaxies; made matterPower default nz=10000;
+      renamed matterPower as MatterPower; ZK, 2017.12.14
 
 """
 
@@ -62,7 +64,7 @@ from scipy import polyfit,poly1d
 ################################################################################
 # the matterPower class
 
-class matterPower:
+class MatterPower:
   """
     Purpose: 
       create and manipulate matter power spectrum objects
@@ -109,7 +111,7 @@ class matterPower:
 
   """
 
-  def __init__(self,nz=1000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,
+  def __init__(self,nz=10000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,
                nonlinear=True,**cos_kwargs):
     """
     
@@ -855,9 +857,8 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
     print 'winGalaxies: binNum set to 0, doNorm set to False.'
 
   # get dz/dchi as ratio of deltaz/deltachi
-  #  why not calculate as 1/H(z)?
   #dzdchi = dzs/dchis
-  dzdchi = 1/myPk.Hs
+  dzdchi = myPk.Hs
 
   # extend Z range for smoothing
   extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)

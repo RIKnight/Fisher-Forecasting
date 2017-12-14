@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 """
   Name:
-    FisherCl
+    FisherCl (branch quickCl)
   Purpose:
     Calculate Fisher matrices for angular power spectra C_l as observables
   Uses:
@@ -45,6 +45,7 @@
     Branched off of master.  This version reverts to function getCl doing
       rough approximation to integration; ZK, 2017.12.13
     Removed CLtools; ZK, 2017.12.13
+    Renamed cp.matterPower as cp.MatterPower; ZK, 2017.12.14
 
 """
 
@@ -175,7 +176,7 @@ class FisherMatrix:
 
     # get matter power object
     print 'creating matter power spectrum object...'
-    myPk = cp.matterPower(nz=nz,**self.cosParams)
+    myPk = cp.MatterPower(nz=nz,**self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
     #self.H0 = myPk.H0
     self.H0 = pars.H0
@@ -213,8 +214,8 @@ class FisherMatrix:
       #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
 
       # create matter power objects and add to lists
-      myPksUpper.append(cp.matterPower(nz=nz,**myParamsUpper[cParamNum]))
-      myPksLower.append(cp.matterPower(nz=nz,**myParamsLower[cParamNum]))
+      myPksUpper.append(cp.MatterPower(nz=nz,**myParamsUpper[cParamNum]))
+      myPksLower.append(cp.MatterPower(nz=nz,**myParamsLower[cParamNum]))
 
     # save some of this
     self.myPk = myPk
