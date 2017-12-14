@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 """
   Name:
-    crosspower.py
+    crosspower.py (branch quickCl)
   Purpose:
     calculate various theoretical angular power spectra for gravitational lensing 
       and galaxies
@@ -43,6 +43,9 @@
     Added H0, Hs fields to matterPower; ZK, 2017.10.20
     Added omega_n to omega_m sum in winKappa; ZK, 2017.10.23
     Changed matter power interpolator zmax to zstar; ZK, 2017.10.24
+
+    Branched off of master.  This version reverts to function getCl doing
+      rough approximation to integration; ZK, 2017.12.13
 
 """
 
