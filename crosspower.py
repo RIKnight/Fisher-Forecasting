@@ -50,6 +50,7 @@
     Added AccuracyBoost to matterPower class; ZK, 2017.11.07
     Fixed winfunc omission in new getCl version; ZK, 2017.11.12
     Added dark energy w as parameter to matterPower, getPars; ZK, 2017.11.15
+    Put in missing 1/H(z) factor to getCl_int; ZK,2017.12.11
 
 """
 
@@ -1300,6 +1301,7 @@ def getCl_int(myPk,zmin=0.0,zmax=4.0,biasFunc1=None,biasFunc2=None,
   """
   PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
   chiOfZ = myPk.getChiofZ()
+  HofZ   = myPk.getHofZ()
   myK = lambda z,ell: (ell+0.5)/chiOfZ(z)
   def wOfKZ(z,k,zmin,zmax,kmin=1e-4,kmax=myPk.kmax):
     if k < kmin:  return 0
@@ -1338,7 +1340,7 @@ def getCl_int(myPk,zmin=0.0,zmax=4.0,biasFunc1=None,biasFunc2=None,
  
   # put the pieces together
   integrandFunction = lambda z,ell: wOfKZ(z,myK(z,ell),zmin,zmax) * \
-                      PK.P(z,myK(z,ell)) *win1(z)*win2(z) / (chiOfZ(z)*chiOfZ(z))
+                      PK.P(z,myK(z,ell)) *win1(z)*win2(z) / (chiOfZ(z)**2*HofZ(z))
   
   return integrandFunction
 
@@ -1385,7 +1387,7 @@ def getCl(myPk,biasFunc1=None,biasFunc2=None,winfunc1=winKappaBin,winfunc2=winKa
           Defalut: False
         binSmooth: parameter that controls the amount of smoothing of bin edges
           Default: 0 (no smoothing)
-      epsrel,epsabs: relative and absolute error margins to pass to quad
+      epsrel,epsabs: relative and absolute error margins to pass to quad.
           whichever one is attained first ends the integration
       returnError: set to True to return error with other values
       zRes: number of points to use in creating window function interpolators
