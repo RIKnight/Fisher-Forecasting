@@ -44,6 +44,7 @@
 
     Branched off of master.  This version reverts to function getCl doing
       rough approximation to integration; ZK, 2017.12.13
+    Removed CLtools; ZK, 2017.12.13
 
 """
 
@@ -58,7 +59,7 @@ from scipy.interpolate import interp1d
 import crosspower as cp
 
 # Dan Coe's CLtools (confidence limit; c2009), for Fisher Matrix, etc.
-import CLtools as cl 
+#import CLtools as cl 
 
 ################################################################################
 # some functions
@@ -628,6 +629,7 @@ class Fisher:
         aIndex: the index of the first parameter
         bIndex: the index of the second parameter
     """
+    """
     # fiducial values
     xFid = self.paramVals[aIndex]
     yFid = self.paramVals[bIndex]
@@ -643,7 +645,8 @@ class Fisher:
     plt.ylim([yFid-limFac*dy,yFid+limFac*dy])
     #cl.finishup(xFid,yFid,xLabel,yLabel,c='k',dc='w',sh=0)
     plt.show()
-  
+    """
+    pass
 
 ################################################################################
 # plotting functions
