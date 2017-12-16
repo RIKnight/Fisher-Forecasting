@@ -51,6 +51,7 @@
       Added dark energy e.o.s. param w to Fisher var.s; ZK, 2017.11.15
     Removed CLtools.  Planning on cosmicFish use later; ZK, 2017.11.25
     Added epsabs and epsrel to FisherMatrix and getCl calls; ZK, 2017.12.13
+    Renamed cp.matterPower as cp.MatterPower; ZK, 2017.12.14
 
 """
 
@@ -197,7 +198,7 @@ class FisherMatrix:
 
     # get matter power object
     print 'creating matter power spectrum object...'
-    myPk = cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**self.cosParams)
+    myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,**self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
     #self.H0 = myPk.H0
     self.H0 = pars.H0
@@ -242,8 +243,8 @@ class FisherMatrix:
       #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
 
       # create matter power objects and add to lists
-      myPksUpper.append(cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsUpper[cParamNum]))
-      myPksLower.append(cp.matterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsLower[cParamNum]))
+      myPksUpper.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsUpper[cParamNum]))
+      myPksLower.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,**myParamsLower[cParamNum]))
 
     # save some of this
     self.myPk = myPk

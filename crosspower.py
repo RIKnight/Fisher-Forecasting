@@ -51,6 +51,8 @@
     Fixed winfunc omission in new getCl version; ZK, 2017.11.12
     Added dark energy w as parameter to matterPower, getPars; ZK, 2017.11.15
     Put in missing 1/H(z) factor to getCl_int; ZK,2017.12.11
+    Fixed dz/dchi problem in winGalaxies; 
+      renamed matterPower as MatterPower; ZK, 2017.12.14
 
 """
 
@@ -68,7 +70,7 @@ from scipy.integrate import quad
 ################################################################################
 # the matterPower class
 
-class matterPower:
+class MatterPower:
   """
     Purpose: 
       create and manipulate matter power spectrum objects
@@ -944,9 +946,8 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
     print 'winGalaxies: binNum set to 0, doNorm set to False.'
 
   # get dz/dchi as ratio of deltaz/deltachi
-  #  why not calculate as 1/H(z)?
   #dzdchi = dzs/dchis
-  dzdchi = 1/Hs
+  dzdchi = Hs
 
   # extend Z range for smoothing
   extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)
