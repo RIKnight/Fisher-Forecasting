@@ -49,6 +49,7 @@
     Modified to use cp.Window objects and new version of getCl; moved bin 
       biasing to cp.Window; added w, AccuracyBoost to matrix params; 
       ZK, 2017.12.18
+    Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
 
 """
 
@@ -351,13 +352,18 @@ class FisherMatrix:
     # create obsList to contain base nMaps representation of data label
     #   where kappa:0, g1:1, g2:2, etc.
     #   eg, C_l^{kappa,g1} -> 0*nMaps+1 = 01 = 1
+    self.fieldNames = ['k']
+    for binNum in range(1,nBins+1):
+        self.fieldNames.append('g'+str(binNum))
     self.obsList = np.zeros(nCls)
+    self.obsNames = []
 
     for map1 in range(nMaps):
       print 'starting covariance set ',map1+1,' of ',nMaps,'... '
       for map2 in range(map1, nMaps):
         covIndex1 = map1*nMaps+map2-map1*(map1+1)/2     # shortens the array
         self.obsList[covIndex1] = map1*nMaps+map2       # base nMaps representation
+        self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
         for map3 in range(nMaps):
           for map4 in range(map3, nMaps):
             covIndex2 = map3*nMaps+map4-map3*(map3+1)/2 # shortens the array
