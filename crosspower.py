@@ -1051,11 +1051,12 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
       Parameters only used in dndzMode = 2:
         nBins: number of bins to create
           Default: 10
-        zmin,zmax: the min,max redshift to use
+        zmin,zmax: the min,max redshift to use for binning
           Defaults: 0,4
       binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
         Default: 0 (no smoothing)
-      zs: optional array of z values to evaluate winKappa at.  
+      zs: optional array of z values to evaluate winKappa at. 
+        Can be outside range (zmin,zmax), as that is only for binning.
         If not specified or is None, myPk.zs will be used.
     Returns:
       function for interpolating winKappa(z) result
@@ -1072,6 +1073,10 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   if 0 not in zs:
     zs = np.insert(zs,0,0)
     winK = np.insert(winK,0,0)
+  # and (zstar,0) at the end
+  if myPk.zstar not in zs:
+    zs = np.insert(zs,-1,myPk.zstar)
+    winK = np.insert(winK,-1,0)
 
   # slice out the bin of interest
   if dndzMode == 1: # use observational dndz
@@ -1155,14 +1160,15 @@ def winKappaBin(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
       Parameters only used in dndzMode = 2:
         nBins: number of bins to create
           Default: 10
-        zmin,zmax: the min,max redshift to use
+        zmin,zmax: the min,max redshift to use for binning
           Defaults: 0,4
         binSmooth: controls smoothing of tophat-stamped bins (unless binNum == 0)
           Default: 0 (no smoothing)
       interpOlny: set to True to return interpolation function.
         otherwise, array evaluated at zs will be returned.
         Default: False
-      zs: optional numpy array of z values to evaluate winKappa at.  
+      zs: optional numpy array of z values to evaluate winKappa at.
+        Can be outside range (zmin,zmax) as that is only for binning
         If not specified or is None, myPk.zs will be used.
       **kwargs: place holder so that winKappaBin and winGalaxies can have
         same parameter list
@@ -1318,7 +1324,9 @@ class Window:
     Purpose: 
         create and store normalized window functions
     Description:
-
+        All window functions returned by methods kappa and galaxies are defined 
+            over the range (zmin,zmax) except for kappa(0), which has
+            the range (0,zstar).
     Data:
       binBKs: the bin biases for kappa
       binBGs: the bin biases for galaxies
@@ -1349,7 +1357,7 @@ class Window:
             depending on which winfunc is selected
             default: biasK=self.ones, biasG=byeBias
             if None: indicates that all biases equal to 1
-          doNorm: set to True to normalize dN/dz
+          doNorm: set to True to normalize dN/dz for galaxy windows
             Default: True
           biasByBin: set to True to use one bias b_i per bin rather than b(z)
             Default: False
@@ -1390,8 +1398,10 @@ class Window:
     self.biasByBin = biasByBin
 
     # evaluate bias functions
-    zs = np.linspace(zmin,zmax,zRes)
+    zs      = np.linspace(zmin,zmax,zRes)       # points for creating interp.
+    zsKstar = np.linspace(zmax,myPk.zstar,zRes) # the rest of the range for k0
     biasesK = biasK(zs)
+    biasesKstar = biasK(zsKstar)
     biasesG = biasG(zs)
     
     # create bin biases, including for sum at index 0
@@ -1414,14 +1424,15 @@ class Window:
     for binNum in range(nBins+1):
         print 'calculating window ',binNum,'... '
         
+        # Find bin biases b_i by taking weighted averages of b(z) over dndz
         # get weighted average over dWdz (lensing kernel)
+        #   note: if binNum==0 this only normalizes the part from zmin to zmax
         normalizedWinK = getNormalizedWinKbin(myPk,binNum,zArray,
               zmin=zmin,zmax=zmax+extraZ,nBins=nBins+extraBins,
               normPoints=normPoints,binSmooth=binSmooth,
               dndzMode=dndzMode,verbose=verbose)
         # approximation to integral:
         self.binBKs[binNum] = np.sum(normalizedWinK*bKofZ)*deltaZ
-
         # get weighted average over dNdz (galaxy distribution)
         normalizedDNDZ = getNormalizedDNDZbin(binNum,zArray,z0,
               zmax+extraZ,nBins+extraBins,dndzMode=dndzMode,zmin=zmin,
@@ -1433,9 +1444,16 @@ class Window:
             biasesK = ones(zs)*self.binBKs[binNum]
             biasesG = ones(zs)*self.binBGs[binNum]
 
-        myKappaFunc = winKappaBin(myPk,biases=biasesK,z0=z0,dndzMode=dndzMode,
-                binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,
-                useWk=useWk,BPZ=BPZ,interpOnly=True,zs=zs)
+        # get kappa and galaxy kernel interpolation functions
+        if binNum == 0: # get the kappa above zmax
+            myZs = np.concatenate((zs,zsKstar[1:]))
+            myBiasesK = np.concatenate((biasesK,biasesKstar[1:]))
+        else:
+            myZs = zs
+            myBiasesK = biasesK
+        myKappaFunc = winKappaBin(myPk,biases=myBiasesK,dndzMode=dndzMode,
+                binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins,
+                BPZ=BPZ,interpOnly=True,zs=myZs)
         self.kappaWindowFunctions.append(myKappaFunc)
         myGalaxiesFunc = winGalaxies(myPk,biases=biasesG,z0=z0,dndzMode=dndzMode,
                 binNum=binNum,zmin=zmin,zmax=zmax,nBins=nBins,doNorm=doNorm,
@@ -1476,13 +1494,15 @@ class Window:
 # the angular power spectrum
 
     
-def getCl_int(myPk,myWin,binNum1=0,binNum2=0,cor1=kappa,cor2=kappa):
+def getCl_int(myPk,myWin,zmin,zmax,binNum1=0,binNum2=0,cor1=Window.kappa,
+              cor2=Window.kappa):
   """
     Purpose: 
       The integrand for the getSimpleCl integral
     Inputs:
       myPk: a MatterPower object
       myWin: a Window object that was made with the same MatterPower object
+      zmin,zmax: min,max redshift to integrate over
       binNum1,binNum2: index indicating which bin to use
         If myWin.dndzMode = 1:
           integer in {0,1,2,3,4,5}
@@ -1502,6 +1522,7 @@ def getCl_int(myPk,myWin,binNum1=0,binNum2=0,cor1=kappa,cor2=kappa):
   PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
   chiOfZ = myPk.getChiofZ()
   HofZ   = myPk.getHofZ()
+
   myK = lambda z,ell: (ell+0.5)/chiOfZ(z)
   def wOfKZ(z,k,zmin,zmax,kmin=1e-4,kmax=myPk.kmax):
     if k < kmin:  return 0
@@ -1572,13 +1593,21 @@ def getCl(myPk,myWin,binNum1=0,binNum2=0,cor1=Window.kappa,cor2=Window.kappa,
   if wincheck(cor1,1)==0: return 0,0
   if wincheck(cor2,2)==0: return 0,0
 
+  # get redshift range
+  zmin = myWin.zmin
+  zmax = myWin.zmax
+  # adjust integration range for kappa-kappa
+  if cor1==Window.kappa and cor2==Window.kappa and binNum1==0 and binNum2==0:
+    zmin = 0
+    zmax = myPk.zstar
+
   # set up arrays to return
   ls  = np.arange(lmin,lmax+1, dtype=np.float64)
   cl  = np.zeros(ls.shape)
   err = np.zeros(ls.shape)
   
   # get integrand
-  integrandOfZL = getCl_int(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
+  integrandOfZL = getCl_int(myPk,myWin,zmin,zmax,binNum1=binNum1,binNum2=binNum2,
                             cor1=cor1,cor2=cor2)
 
   # do the integration
@@ -1739,7 +1768,8 @@ def plotCl(ls,Cl):
 
 def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
            dndzMode=1,binNum1=0,binNum2=0,zmax=4,nBins=10,z0=0.3,
-           doNorm=True,useWk=False,binSmooth=0,biasByBin=False):
+           doNorm=True,useWk=False,binSmooth=0,biasByBin=False,
+           epsrel=1.49e-2,epsabs=1.49e-2):
   """
   Purpose:
     to plot each C_l for kappa, galaxy combinations
@@ -1765,19 +1795,24 @@ def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
       z0: controls the width of the total galaxy distribution
       useWk:
       binSmooth:
+    epsrel,epsabs: quad relative,absolute precision params
 
   """
   myWin = Window(myPk,zmax=zmax,nBins=nBins,biasK=ones,biasG=ones,
                  dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                  binSmooth=binSmooth,biasByBin=biasByBin)
   ls1, Cl1 = getCl(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
-                   cor1=Window.kappa,cor2=Window.kappa,lmin=lmin,lmax=lmax)
+                   cor1=Window.kappa,cor2=Window.kappa,lmin=lmin,
+                   lmax=lmax,epsrel=epsrel,epsabs=epsabs)
   ls2, Cl2 = getCl(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
-                   cor1=Window.kappa,cor2=Window.galaxies,lmin=lmin,lmax=lmax)
+                   cor1=Window.kappa,cor2=Window.galaxies,lmin=lmin,
+                   lmax=lmax,epsrel=epsrel,epsabs=epsabs)
   ls3, Cl3 = getCl(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
-                   cor1=Window.galaxies,cor2=Window.kappa,lmin=lmin,lmax=lmax)
+                   cor1=Window.galaxies,cor2=Window.kappa,lmin=lmin,
+                   lmax=lmax,epsrel=epsrel,epsabs=epsabs)
   ls4, Cl4 = getCl(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
-                   cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,lmax=lmax)
+                   cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,
+                   lmax=lmax,epsrel=epsrel,epsabs=epsabs)
 
 
   p1=plt.semilogy(ls1,Cl1,label='$\kappa\kappa$')
@@ -1794,7 +1829,8 @@ def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
 
 def plotGG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
            dndzMode=1,zmax=4,nBins=10,z0=0.3,
-           doNorm=True,useWk=False,binSmooth=0,biasByBin=False):
+           doNorm=True,useWk=False,binSmooth=0,biasByBin=False,
+           epsrel=1.49e-2,epsabs=1.49e-2):
   """
   Purpose:
     plot all Cl^{g_i g_j} for i,j in {1,2,3,4,5}
@@ -1806,6 +1842,7 @@ def plotGG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
     doNorm:
     useWk:
     binSmooth:
+    epsrel,epsabs: quad relative,absolute precision params
   """
   if dndzMode == 1:
       zmin = 0
@@ -1818,7 +1855,8 @@ def plotGG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
     for j in range(i,nBins+1):
       print 'starting g_',i,' g_',j
       ls, Cl = getCl(myPk,myWin,binNum1=i,binNum2=j,
-                     cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,lmax=lmax)
+                     cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,
+                     lmax=lmax,epsrel=epsrel,epsabs=epsabs)
       plt.semilogy(ls,Cl,label='g_'+str(i)+', g_'+str(j))
   plt.xlim(0,lmax)
   plt.xlabel(r'$\ell$')
@@ -1830,7 +1868,8 @@ def plotGG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
 
 def plotGGsum(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
            dndzMode=1,zmax=4,nBins=10,z0=0.3,
-           doNorm=True,useWk=False,binSmooth=0,biasByBin=False):
+           doNorm=True,useWk=False,binSmooth=0,biasByBin=False,
+           epsrel=1.49e-2,epsabs=1.49e-2):
   """
   Note: this is basically included in plotKG
   Note: does not have option for getCl to use anything but dndzMode=1
@@ -1842,14 +1881,14 @@ def plotGGsum(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
     doNorm:
     useWk:
     binSmooth:
-
+    epsrel,epsabs: quad relative,absolute precision params
   """
   myWin = Window(myPk,zmax=zmax,nBins=nBins,biasK=ones,biasG=ones,
                  dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                  binSmooth=binSmooth,biasByBin=biasByBin)
   ls, Cl = getCl(myPk,myWin,binNum1=0,binNum2=0,
-                 cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,lmax=lmax)
-  #ls,Cl = getCl(myPk,biases1=biases,biases2=biases,winfunc1=winGalaxies,winfunc2=winGalaxies,binNum1=0,binNum2=0,doNorm=doNorm,useWk=useWk,binSmooth=binSmooth)
+                 cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,
+                 lmax=lmax,epsrel=epsrel,epsabs=epsabs)
   plt.semilogy(ls,Cl)
   plt.title('C_l^gg for sum of all dNdz curves')
   plt.show()
