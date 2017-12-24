@@ -56,6 +56,7 @@
     Modified to use cp.Window objects and new version of getCl; 
       moved bin biasing to cp.Window; ZK, 2017.12.18
     Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
+    Added descriptive data to class MatterPower; ZK,2017.12.24
 
 """
 
@@ -170,6 +171,7 @@ class FisherMatrix:
       zmax = 1.5 # to match dndz files
 
     # set other parameters
+    self.nz = nz
     self.dndzMode = dndzMode
     self.BPZ = BPZ
     self.zmin = zmin
@@ -179,6 +181,13 @@ class FisherMatrix:
     self.lmin = lmin
     self.lmax = lmax
     self.AccuracyBoost=AccuracyBoost
+    self.doNorm = doNorm
+    self.useWk = useWk
+    self.binSmooth = binSmooth
+    self.biasByBin = biasByBin
+    self.epsrel = epsrel
+    self.epsabs = epsabs
+
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
