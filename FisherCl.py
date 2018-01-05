@@ -51,6 +51,7 @@
       ZK, 2017.12.18
     Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
     Added descriptive data to class MatterPower; ZK,2017.12.24
+    Modified FisherMatrix to use lmin; ZK, 2018.01.02
 
 """
 
@@ -276,9 +277,9 @@ class FisherMatrix:
     # If I use AOfZ not all 1, this needs to be changed 
     #   to include summation over bins for kk
 
-    self.crossCls      = np.zeros((nMaps,nMaps,           lmax-1)) #-1 to omit ell=1
-    self.crossClsPlus  = np.zeros((nMaps,nMaps,nCosParams,lmax-1))
-    self.crossClsMinus = np.zeros((nMaps,nMaps,nCosParams,lmax-1))
+    self.crossCls      = np.zeros((nMaps,nMaps,           lmax-lmin+1))
+    self.crossClsPlus  = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
+    self.crossClsMinus = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
 
     # if tophatBins, only the diagonal and 0th row and column will be filled
     print 'starting cross power with entire kappa... '
@@ -316,9 +317,9 @@ class FisherMatrix:
     self.ells = ells
 
     # divide K,G into bins and get crossClbins
-    self.crossClBinsKK = np.zeros((nBins,nBins,lmax-1))
-    self.crossClBinsKG = np.zeros((nBins,nBins,lmax-1))
-    self.crossClBinsGG = np.zeros((nBins,nBins,lmax-1))
+    self.crossClBinsKK = np.zeros((nBins,nBins,lmax-lmin+1))
+    self.crossClBinsKG = np.zeros((nBins,nBins,lmax-lmin+1))
+    self.crossClBinsGG = np.zeros((nBins,nBins,lmax-lmin+1))
 
     # if tophatBins, only the diagonals will be filled
     # note: cp.getCl has a +1 offset to bin numbers, 
@@ -354,7 +355,7 @@ class FisherMatrix:
 
     #nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
     # nCls defined above
-    self.covar = np.zeros((nCls,nCls,lmax-1))
+    self.covar = np.zeros((nCls,nCls,lmax-lmin+1))
 
     # create obsList to contain base nMaps representation of data label
     #   where kappa:0, g1:1, g2:2, etc.
@@ -394,8 +395,8 @@ class FisherMatrix:
     # get dC_l^munu/da_i (one vector of derivatives of C_ls for each param a_i)
     # store as matrix with additional dimension for a_i)
     # uses same (shortened) nCls as self.covar and self.obsList
-    self.dClVecs = np.empty((nCls, nParams, lmax-1))
-    Clzeros = np.zeros(lmax-1) # for putting into dClVecs when needed
+    self.dClVecs = np.empty((nCls, nParams, lmax-lmin+1))
+    Clzeros = np.zeros(lmax-lmin+1) # for putting into dClVecs when needed
     for map1 in range(nMaps):
       print 'starting derivative set ',map1+1,' of ',nMaps,'... '
       for map2 in range(map1,nMaps):
@@ -446,21 +447,40 @@ class FisherMatrix:
 # other methods
 
 
-  def makeFisher(self,lmin,lmax):
-    #multply vectorT,invcov,vector and add up
-    print 'building Fisher matrix from components...'
-    print 'invCov.shape: ',self.invCov.shape,', dClVecs.shape: ',self.dClVecs.shape
+  def makeFisher(self,lmin,lmax,verbose=False):
+    """
+      Purpose:
+        multply vectorT,invcov,vector and add up
+      Inputs:
+        self: a FisherMatrix object
+        lmin: the lowest ell to include in the sum
+          must be GE self.lmin
+        lmax: the highest ell to inlude in the sum
+          must be LE self.lmax
+        verbose: set to True to have extra output
+          Default: False
+      Returns:
+        a Fisher Matrix, dimensions self.nParams x self.nParams
+    """
+    if lmin < self.lmin or lmax > self.lmax:
+      print 'makeFisher: bad lmin or lmax!'
+      return 0
+    if verbose:
+      print 'building Fisher matrix from components...'
+      print 'invCov.shape: ',self.invCov.shape,', dClVecs.shape: ',self.dClVecs.shape
     nParams = self.nParams
     Fij = np.zeros((nParams,nParams)) # indices match those in paramList
     for i in range(nParams):
-      print 'starting bin set ',i+1,' of ',nParams
+      if verbose:
+        print 'starting bin set ',i+1,' of ',nParams
       dClVec_i = self.dClVecs[:,i,:] # shape (nCls,nElls)
       for j in range(nParams):
         dClVec_j = self.dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
-        for ell in range(lmax-1):
-          myCov = self.invCov[:,:,ell]
-          fij = np.dot(dClVec_i[:,ell],np.dot(myCov,dClVec_j[:,ell]))
+        for ell in range(lmax-lmin+1):
+          ellInd = ell+self.lmin-lmin # adjust ell to match indices in arrays
+          myCov = self.invCov[:,:,ellInd]
+          fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
     return Fij
     
