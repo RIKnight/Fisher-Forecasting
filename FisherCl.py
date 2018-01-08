@@ -586,7 +586,7 @@ class FisherMatrix:
     # note: most of this is copied from above.  
     #   Later I should consolidate the two versions into a function.
     if usePrimaryCMB:
-        dClVecsP = np.empty((nClsP, nCosParams, lmax-lmin+1))
+        dClVecsP = np.empty((nClsP, nCosParams, lmaxP-lminP+1))
 
         for map1 in range(nMapsP):
             print 'starting primary CMB derivative set ',map1+1,' of ',nMapsP,'... '
@@ -603,6 +603,8 @@ class FisherMatrix:
 ################################################################################
     #Build Fisher matrix
     self.Fij = self.makeFisher(self.lmin,self.lmax)
+    if usePrimaryCMB:
+        self.FijTE = self.makeFisher(self.lminP,self.lmaxP,TE=True)
     print 'creation of Fisher Matrix complete!\n'
     # end of init function
 
@@ -612,21 +614,60 @@ class FisherMatrix:
 # other methods
 
 
-  def makeFisher(self,lmin,lmax):
-    #multply vectorT,invcov,vector and add up
-    print 'building Fisher matrix from components...'
-    print 'invCov.shape: ',self.invCov.shape,', dClVecs.shape: ',self.dClVecs.shape
-    nParams = self.nParams
+  def makeFisher(self,lmin,lmax,TE=False,verbose=False):
+    """
+      Purpose:
+        multply vectorT,invcov,vector and add up
+      Inputs:
+        self: a FisherMatrix object
+        lmin: the lowest ell to include in the sum
+          must be GE self.lmin
+        lmax: the highest ell to inlude in the sum
+          must be LE self.lmax
+        TE: set to True to compute Fij for T,E instead of k,g
+          Default: False
+        verbose: set to True to have extra output
+          Default: False
+      Returns:
+        a Fisher Matrix, dimensions self.nParams x self.nParams
+    """
+    if usePrimaryCMB:
+      if lmin < self.lminP or lmax > self.lmaxP:
+        print 'makeFisher: bad lminP or lmaxP!'
+        return 0
+      selfLmin = self.lminP
+      selfLmax = self.lmaxP
+      nParams = self.nParamsP
+      invCov = self.invCovP
+      dClVecs = self.dClVecsP
+
+    else:
+      if lmin < self.lmin or lmax > self.lmax:
+        print 'makeFisher: bad lmin or lmax!'
+        return 0
+      selfLmin = self.lmin
+      selfLmax = self.lmax
+      nParams = self.nParams
+      invCov = self.invCov
+      dClVecs = self.dClVecs
+    
+    
+    if verbose:
+      print 'building Fisher matrix from components...'
+      print 'invCov.shape: ',invCov.shape,', dClVecs.shape: ',dClVecs.shape
+
     Fij = np.zeros((nParams,nParams)) # indices match those in paramList
     for i in range(nParams):
-      print 'starting bin set ',i+1,' of ',nParams
-      dClVec_i = self.dClVecs[:,i,:] # shape (nCls,nElls)
+      if verbose:
+        print 'starting bin set ',i+1,' of ',nParams
+      dClVec_i = dClVecs[:,i,:] # shape (nCls,nElls)
       for j in range(nParams):
-        dClVec_j = self.dClVecs[:,j,:] # shape (nCls,nElls)
+        dClVec_j = dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
-        for ell in range(lmax-1):
-          myCov = self.invCov[:,:,ell]
-          fij = np.dot(dClVec_i[:,ell],np.dot(myCov,dClVec_j[:,ell]))
+        for ell in range(lmax-lmin+1):
+          ellInd = ell+selfLmin-lmin # adjust ell to match indices in arrays
+          myCov = invCov[:,:,ellInd]
+          fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
     return Fij
     
