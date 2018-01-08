@@ -57,10 +57,8 @@
       moved bin biasing to cp.Window; ZK, 2017.12.18
     Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
     Added descriptive data to class MatterPower; ZK,2017.12.24
-
-    Branched primaryCMB off of master;
-      Implemented lmin along with lmax in MatterPower;
-      Added primary CMB Fisher functions to class MatterPower; ZK, 2017.12.25
+    Implemented lmin along with lmax in MatterPower;  Added primary CMB 
+      Fisher functions to class MatterPower; ZK, 2017.12.25
 
 """
 
