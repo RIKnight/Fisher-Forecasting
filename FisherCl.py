@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 """
   Name:
-    FisherCl (branch primaryCMB)
+    FisherCl
   Purpose:
     Calculate Fisher matrices for angular power spectra C_l as observables
   Uses:
@@ -59,6 +59,8 @@
     Added descriptive data to class MatterPower; ZK,2017.12.24
     Implemented lmin along with lmax in MatterPower;  Added primary CMB 
       Fisher functions to class MatterPower; ZK, 2017.12.25
+    Added nolinear parameter to MatterPower calls; ZK, 2018.01.11
+    Added camb import for use by usePrimaryCMB via pars; ZK, 2018.01.16
 
 """
 
@@ -67,7 +69,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 #import scipy.integrate as sint
 from scipy.interpolate import interp1d
-#import camb
+import camb
 #from camb import model, initialpower
 #from scipy import polyfit,poly1d
 import crosspower as cp
@@ -100,7 +102,7 @@ class FisherMatrix:
   def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
                noAs=True,usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
-               epsrel=1.49e-2,epsabs=0,**cos_kwargs):
+               epsrel=1.49e-2,epsabs=0,nonlinear=False,**cos_kwargs):
     """
     
       Inputs:
@@ -134,6 +136,8 @@ class FisherMatrix:
           Default: 3
         epsrel,epsabs: relative and absolute error margins to pass to quad.
           whichever one is attained first ends the integration
+        nonlinear: set to True to use Halofit for nonlinear evolution.
+          Default: False
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -192,6 +196,7 @@ class FisherMatrix:
     self.epsrel = epsrel
     self.epsabs = epsabs
     self.usePrimaryCMB = usePrimaryCMB
+    self.nonlinear = nonlinear
 
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
@@ -224,7 +229,8 @@ class FisherMatrix:
 
     # get MatterPower object
     print 'creating MatterPower object...'
-    myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,**self.cosParams)
+    myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,nonlinear=nonlinear,
+                          **self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
     #self.H0 = myPk.H0
     self.H0 = pars.H0
@@ -280,9 +286,9 @@ class FisherMatrix:
 
       # create MatterPower objects and add to lists
       myPksUpper.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        **myParamsUpper[cParamNum]))
+                        nonlinear=nonlinear,**myParamsUpper[cParamNum]))
       myPksLower.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        **myParamsLower[cParamNum]))
+                        nonlinear=nonlinear,**myParamsLower[cParamNum]))
       # create Window objects and add to lists
       myWinsUpper.append(cp.Window(myPksUpper[cParamNum],zmin=zmin,zmax=zmax,
                          nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
@@ -428,7 +434,7 @@ class FisherMatrix:
 
         # get the perturbed versions
         for paramNum in range(nCosParams):
-            print 'getting Primary CMB Cl power spectra for parameter ',
+            print 'getting Primary CMB Cl power spectra for parameter ', \
                   paramList[paramNum]
             parsUpper = myPksUpper[paramNum].pars
             parsLower = myPksLower[paramNum].pars
@@ -629,7 +635,7 @@ class FisherMatrix:
       Returns:
         a Fisher Matrix, dimensions self.nParams x self.nParams
     """
-    if usePrimaryCMB:
+    if TE:
       if lmin < self.lminP or lmax > self.lmaxP:
         print 'makeFisher: bad lminP or lmaxP!'
         return 0
