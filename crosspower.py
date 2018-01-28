@@ -302,6 +302,9 @@ class MatterPower:
         self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
             hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar)
+        #self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
+        #    hubble_units=True, k_hunit=True, kmax=kmax,k_per_logint=k_per_logint,
+        #    var1=myVar1,var2=myVar2, zmax=self.zstar)
 
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'
