@@ -52,6 +52,7 @@
     Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
     Added descriptive data to class MatterPower; ZK,2017.12.24
     Modified FisherMatrix to use lmin; ZK, 2018.01.02
+    Pulled nonlinear parameter up to FisherMatrix.__init__; ZK, 2018.01.28
 
 """
 
@@ -92,7 +93,7 @@ class FisherMatrix:
 
   def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               biasByBin=True,AccuracyBoost=3,**cos_kwargs):
+               biasByBin=True,AccuracyBoost=3,nonlinear=False,**cos_kwargs):
     """
     
       Inputs:
@@ -116,6 +117,10 @@ class FisherMatrix:
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
         AccuracyBoost: to pass to set_accuracy to set accuracy
+          Note that this sets accuracy globally, not just for this object
+          Default: 3
+        nonlinear: set to True to use Halofit for nonlinear evolution.
+          Default: False
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -171,6 +176,7 @@ class FisherMatrix:
     self.useWk = useWk
     self.binSmooth = binSmooth
     self.biasByBin = biasByBin
+    self.nonlinear = nonlinear
 
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
@@ -196,7 +202,8 @@ class FisherMatrix:
 
     # get MatterPower object
     print 'creating MatterPower object...'
-    myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,**self.cosParams)
+    myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,nonlinear=nonlinear,
+                          **self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
     #self.H0 = myPk.H0
     self.H0 = pars.H0
@@ -248,9 +255,9 @@ class FisherMatrix:
 
       # create MatterPower objects and add to lists
       myPksUpper.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        **myParamsUpper[cParamNum]))
+                        nonlinear=nonlinear,**myParamsUpper[cParamNum]))
       myPksLower.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        **myParamsLower[cParamNum]))
+                        nonlinear=nonlinear,**myParamsLower[cParamNum]))
       # create Window objects and add to lists
       myWinsUpper.append(cp.Window(myPksUpper[cParamNum],zmin=zmin,zmax=zmax,
                          nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,

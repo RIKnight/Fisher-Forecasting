@@ -55,6 +55,8 @@
       modified test functions to use new version of getCl;
       ZK, 2017.12.17
     Added biasByBin functionality to Window; ZK, 2017.12.18
+    Pulled myVar1, myVar2 up to MatterPower.__init__; 
+      Added kludge to force binBKs (binAs) to all be 1; ZK, 2018.01.28
 
 """
 
@@ -119,7 +121,8 @@ class MatterPower:
   """
 
   def __init__(self,nz=10000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,
-               nonlinear=True,AccuracyBoost=3,**cos_kwargs):
+               nonlinear=True,AccuracyBoost=3,myVar1=model.Transfer_tot,
+               myVar2=model.Transfer_tot,**cos_kwargs):
     """
     
       Inputs:
@@ -134,6 +137,9 @@ class MatterPower:
           default: -1
         nonlinear: set to True to use CAMB's non-linear correction from halo model
         AccuracyBoost: to pass to set_accuracy to set accuracy
+          Note that this sets accuracy globally, not just for this object
+        myVar1,myVar2: the variables to get power spectrum of
+          Default: model.Transfer_tot for delta_tot
         **cos_kwargs: the cosmological parameters for camb's set_cosmology
 
     """
@@ -168,7 +174,7 @@ class MatterPower:
     # make the PK interpolator (via camb)
     self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,w=w,
                       kPivot=kPivot,k_per_logint=k_per_logint,nonlinear=nonlinear,
-                      AccuracyBoost=AccuracyBoost)
+                      AccuracyBoost=AccuracyBoost,myVar1=myVar1,myVar2=myVar2)
 
 
 
@@ -281,10 +287,20 @@ class MatterPower:
     print 'zs.size: ',self.zs.size
 
     #Get the matter power spectrum interpolation object (based on RectBivariateSpline). 
-    #Here for lensing we want the power spectrum of the Weyl potential.
-    self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-        hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
-        var1=myVar1,var2=myVar2, zmax=self.zstar)
+    #return_z_k = True
+    return_z_k = False
+    if return_z_k:
+        self.PK, self.zArray, self.kArray = \
+            camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
+            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
+            var1=myVar1,var2=myVar2, zmax=self.zstar, return_z_k=return_z_k)
+    else:
+        self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
+            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
+            var1=myVar1,var2=myVar2, zmax=self.zstar)
+        #self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
+        #    hubble_units=True, k_hunit=True, kmax=kmax,k_per_logint=k_per_logint,
+        #    var1=myVar1,var2=myVar2, zmax=self.zstar)
 
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'
@@ -1358,8 +1374,9 @@ class Window:
     biasesG = biasG(zs)
     
     # create bin biases, including for sum at index 0
-    self.binBKs = np.empty(nBins+1)
+    #self.binBKs = np.empty(nBins+1)
     self.binBGs = np.empty(nBins+1)
+    self.binBKs = np.ones(nBins+1) # just force them to all be 1.
      
     # setup for normalization routines
     normPoints = 0 #depreciated; use myNormPoints instead
@@ -1377,6 +1394,8 @@ class Window:
     for binNum in range(nBins+1):
         print 'calculating window ',binNum,'... '
 
+        # commented out to force all amplitudes to be 1
+        """
         # get weighted average over dWdz (lensing kernel)
         normalizedWinK = getNormalizedWinKbin(myPk,binNum,zArray,
               zmin=zmin,zmax=zmax+extraZ,nBins=nBins+extraBins,
@@ -1385,6 +1404,7 @@ class Window:
 
         # approximation to integral:
         self.binBKs[binNum] = np.sum(normalizedWinK*bKofZ)*deltaZ
+        """
 
         # get weighted average over dNdz (galaxy distribution)
         normalizedDNDZ = getNormalizedDNDZbin(binNum,zArray,z0,
