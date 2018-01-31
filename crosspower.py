@@ -1421,8 +1421,9 @@ class Window:
     biasesG = biasG(zs)
     
     # create bin biases, including for sum at index 0
-    self.binBKs = np.empty(nBins+1)
+    #self.binBKs = np.empty(nBins+1)
     self.binBGs = np.empty(nBins+1)
+    self.binBKs = np.ones(nBins+1) # just force them to all be 1.
     
     # setup for normalization routines
     normPoints = 0 #depreciated; use myNormPoints instead
@@ -1441,6 +1442,9 @@ class Window:
         print 'calculating window ',binNum,'... '
         
         # Find bin biases b_i by taking weighted averages of b(z) over dndz
+
+        # commented out to force all amplitudes to be 1
+        """
         # get weighted average over dWdz (lensing kernel)
         #   note: if binNum==0 this only normalizes the part from zmin to zmax
         normalizedWinK = getNormalizedWinKbin(myPk,binNum,zArray,
@@ -1449,6 +1453,8 @@ class Window:
               dndzMode=dndzMode,verbose=verbose)
         # approximation to integral:
         self.binBKs[binNum] = np.sum(normalizedWinK*bKofZ)*deltaZ
+        """
+
         # get weighted average over dNdz (galaxy distribution)
         normalizedDNDZ = getNormalizedDNDZbin(binNum,zArray,z0,
               zmax+extraZ,nBins+extraBins,dndzMode=dndzMode,zmin=zmin,
