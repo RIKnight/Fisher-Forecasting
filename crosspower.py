@@ -60,6 +60,7 @@
     Pulled parameters var1 and var2 for camb.get_matter_power_interpolator
       up to MatterPower.__init__ as myVar1, myVar2; ZK, 2018.01.09
     Added return_z_k for troubleshooting; ZK, 2018.01.10
+    Added neutrino_hierarchy output, AccuracyBoost record; ZK, 2018.02.06
 
 """
 
@@ -168,7 +169,11 @@ class MatterPower:
     self.r  = r
     self.kPivot = kPivot
     self.nonlinear=nonlinear
+    self.AccuracyBoost = AccuracyBoost
     self.w = w
+
+    # check this
+    print 'neutrino_hierarchy = ',self.cosParams['neutrino_hierarchy']
 
     # more parameters
     self.nz = nz # this will actually be 2 more than the number of z points
@@ -299,12 +304,19 @@ class MatterPower:
             hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar, return_z_k=return_z_k)
     else:
-        self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
-            var1=myVar1,var2=myVar2, zmax=self.zstar)
-        #self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-        #    hubble_units=True, k_hunit=True, kmax=kmax,k_per_logint=k_per_logint,
-        #    var1=myVar1,var2=myVar2, zmax=self.zstar)
+        hunits=True
+        #hunits=False
+        if hunits:
+            # kludge for using hunits:
+            self.PK = camb.get_matter_power_interpolator(self.pars, 
+                nonlinear=nonlinear, hubble_units=True, k_hunit=True, 
+                kmax=kmax,k_per_logint=k_per_logint,
+                var1=myVar1,var2=myVar2, zmax=self.zstar)
+        else:
+            self.PK = camb.get_matter_power_interpolator(self.pars, 
+                nonlinear=nonlinear, hubble_units=False, k_hunit=False, 
+                kmax=kmax,k_per_logint=k_per_logint,
+                var1=myVar1,var2=myVar2, zmax=self.zstar)
 
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'

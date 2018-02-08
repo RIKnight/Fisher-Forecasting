@@ -61,6 +61,7 @@
       Fisher functions to class MatterPower; ZK, 2017.12.25
     Added nolinear parameter to MatterPower calls; ZK, 2018.01.11
     Added camb import for use by usePrimaryCMB via pars; ZK, 2018.01.16
+    Adjusted deltaP dw from 0.3 to 0.05; ZK, 2018.02.06
 
 """
 
@@ -225,7 +226,8 @@ class FisherMatrix:
 
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
-    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
+    #deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
+    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05] #mnu one in eV
 
     # get MatterPower object
     print 'creating MatterPower object...'
