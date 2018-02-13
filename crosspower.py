@@ -240,7 +240,7 @@ class MatterPower:
   def makePKinterp(self,newPk=True,nz=10000,kmax=10,As=2.130e-9,ns=0.9653,r=0,
                    kPivot=0.05,w=-1,myVar1=model.Transfer_tot,
                    myVar2=model.Transfer_tot,k_per_logint=None,
-                   nonlinear=True,AccuracyBoost=3,**cos_kwargs):
+                   nonlinear=True,AccuracyBoost=3,hunits=False,**cos_kwargs):
     """
       example code from http://camb.readthedocs.io/en/latest/CAMBdemo.html
         (modified to have nz,kmax,myVar as inputs)
@@ -270,6 +270,8 @@ class MatterPower:
           Default: True
         AccuracyBoost: to pass to set_accuracy to set accuracy
           Note that this sets accuracy globally, not just for this object
+        hunits: set to True to use h-units for k, P(k)
+          Default: False
         **cos_kwargs: keyword args to pass to getPars and set_cosmology
           if not used, getPars will use object defaults
       Outputs:
@@ -301,22 +303,13 @@ class MatterPower:
     if return_z_k:
         self.PK, self.zArray, self.kArray = \
             camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
+            hubble_units=hunits, k_hunit=hunits, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar, return_z_k=return_z_k)
     else:
-        hunits=True
-        #hunits=False
-        if hunits:
-            # kludge for using hunits:
-            self.PK = camb.get_matter_power_interpolator(self.pars, 
-                nonlinear=nonlinear, hubble_units=True, k_hunit=True, 
-                kmax=kmax,k_per_logint=k_per_logint,
-                var1=myVar1,var2=myVar2, zmax=self.zstar)
-        else:
-            self.PK = camb.get_matter_power_interpolator(self.pars, 
-                nonlinear=nonlinear, hubble_units=False, k_hunit=False, 
-                kmax=kmax,k_per_logint=k_per_logint,
-                var1=myVar1,var2=myVar2, zmax=self.zstar)
+        self.PK = camb.get_matter_power_interpolator(self.pars, 
+            nonlinear=nonlinear, hubble_units=hunits, k_hunit=hunits, 
+            kmax=kmax,k_per_logint=k_per_logint,
+            var1=myVar1,var2=myVar2, zmax=self.zstar)
 
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'

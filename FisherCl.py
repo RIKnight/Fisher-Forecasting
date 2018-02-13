@@ -62,6 +62,8 @@
     Added nolinear parameter to MatterPower calls; ZK, 2018.01.11
     Added camb import for use by usePrimaryCMB via pars; ZK, 2018.01.16
     Adjusted deltaP dw from 0.3 to 0.05; ZK, 2018.02.06
+    Added neutrino_hierarchy field to FisherMatrix; 
+      Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.12
 
 """
 
@@ -198,6 +200,7 @@ class FisherMatrix:
     self.epsabs = epsabs
     self.usePrimaryCMB = usePrimaryCMB
     self.nonlinear = nonlinear
+    self.neutrino_hierarchy = cos_kwargs['neutrino_hierarchy']
 
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
@@ -657,7 +660,6 @@ class FisherMatrix:
       invCov = self.invCov
       dClVecs = self.dClVecs
     
-    
     if verbose:
       print 'building Fisher matrix from components...'
       print 'invCov.shape: ',invCov.shape,', dClVecs.shape: ',dClVecs.shape
@@ -671,7 +673,9 @@ class FisherMatrix:
         dClVec_j = dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):
-          ellInd = ell+selfLmin-lmin # adjust ell to match indices in arrays
+          
+          ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
+          
           myCov = invCov[:,:,ellInd]
           fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
