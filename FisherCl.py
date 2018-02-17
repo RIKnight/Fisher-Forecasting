@@ -53,6 +53,9 @@
     Added descriptive data to class MatterPower; ZK,2017.12.24
     Modified FisherMatrix to use lmin; ZK, 2018.01.02
     Pulled nonlinear parameter up to FisherMatrix.__init__; ZK, 2018.01.28
+    Adjusted deltaP dw from 0.3 to 0.05; ZK,
+      Added neutrino_hierarchy field to FisherMatrix; 
+      Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.16
 
 """
 
@@ -177,6 +180,7 @@ class FisherMatrix:
     self.binSmooth = binSmooth
     self.biasByBin = biasByBin
     self.nonlinear = nonlinear
+    self.neutrino_hierarchy = cos_kwargs['neutrino_hierarchy']
 
     if binSmooth == 0 and dndzMode == 2:
       tophatBins = True # true if bins do not overlap, false if they do
@@ -198,7 +202,8 @@ class FisherMatrix:
 
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
-    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
+    #deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
+    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05] #mnu one in eV
 
     # get MatterPower object
     print 'creating MatterPower object...'
@@ -485,7 +490,9 @@ class FisherMatrix:
         dClVec_j = self.dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):
-          ellInd = ell+self.lmin-lmin # adjust ell to match indices in arrays
+
+          ellInd = ell+lmin-self.lmin # adjust ell to match indices in arrays
+          
           myCov = self.invCov[:,:,ellInd]
           fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij

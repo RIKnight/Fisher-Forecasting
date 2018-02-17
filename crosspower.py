@@ -57,6 +57,7 @@
     Added biasByBin functionality to Window; ZK, 2017.12.18
     Pulled myVar1, myVar2 up to MatterPower.__init__; 
       Added kludge to force binBKs (binAs) to all be 1; ZK, 2018.01.28
+    Added neutrino_hierarchy output, AccuracyBoost record; ZK, 2018.02.16
 
 """
 
@@ -98,7 +99,7 @@ class MatterPower:
       ns: primordial running
       r: something else primordial (tensor to scalar, probably)
       nz: number of z points to collect z, chi, dz, dchi at between here and last scattering
-        Default: 1000
+        Default: 10000
       kmax: maximum k value to use in Pk
 
       PK:
@@ -164,7 +165,11 @@ class MatterPower:
     self.r  = r
     self.kPivot = kPivot
     self.nonlinear=nonlinear
+    self.AccuracyBoost = AccuracyBoost
     self.w = w
+
+    # check this
+    print 'neutrino_hierarchy = ',self.cosParams['neutrino_hierarchy']
 
     # more parameters
     self.nz = nz # this will actually be 2 more than the number of z points
