@@ -64,6 +64,8 @@
     Adjusted deltaP dw from 0.3 to 0.05; ZK, 2018.02.06
     Added neutrino_hierarchy field to FisherMatrix; 
       Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.12
+    Modified so MatterPower objects previously stored in myPksUpper and 
+      myPksLower are used immediatly then discarded; ZK, 2018.02.18 
 
 """
 
@@ -258,10 +260,10 @@ class FisherMatrix:
     myParams = self.cosParams
     myParamsUpper = []
     myParamsLower = []
-    myPksUpper = []
-    myPksLower = []
-    myWinsUpper = []
-    myWinsLower = []
+    #myPksUpper = []
+    #myPksLower = []
+    #myWinsUpper = []
+    #myWinsLower = []
     for cParamNum in range(nCosParams):
       print 'creating matter power spectra and window functions for ',\
             paramList[cParamNum],' derivative...'
@@ -289,6 +291,11 @@ class FisherMatrix:
       #print 'myParamsLower[cParamNum][paramList[cParamNum]]: ',myParamsLower[cParamNum][paramList[cParamNum]]
       #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
 
+
+
+      # this section moved to directly before their use to enable throwing 
+      #  out immediately afterward
+      """
       # create MatterPower objects and add to lists
       myPksUpper.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
                         nonlinear=nonlinear,**myParamsUpper[cParamNum]))
@@ -303,6 +310,7 @@ class FisherMatrix:
                          nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
                          dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                          BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin))
+      """
 
     # save some of this
     self.myPk = myPk
@@ -326,40 +334,72 @@ class FisherMatrix:
 
     # if tophatBins, only the diagonal and 0th row and column will be filled
     print 'starting cross power with entire kappa... '
-    for map1 in range(nMaps):
-      if map1==0:
-        cor1 = cp.Window.kappa
-      else:
-        cor1 = cp.Window.galaxies
-      for map2 in range(map1,nMaps):
-        print 'starting angular cross power spectrum ',map1,', ',map2,'... '
-        if map2==0:
-          cor2 = cp.Window.kappa
-        else:
-          cor2 = cp.Window.galaxies
-        # since nonoverlapping bins have zero correlation use this condition:
-        if map1==0 or map1==map2 or not tophatBins:
-          ells,Cls = cp.getCl(myPk,myWin,binNum1=map1,binNum2=map2,
-                           cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                           epsrel=epsrel,epsabs=epsabs)
-          self.crossCls[map1,map2] = Cls
-          self.crossCls[map2,map1] = Cls #symmetric
 
-          # now the adjustments for numeric derivatives
-          for cParamNum in range(nCosParams):
-            ells,Cls = cp.getCl(myPksUpper[cParamNum],myWinsUpper[cParamNum],
-                                binNum1=map1,binNum2=map2,
-                                cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                                epsrel=epsrel,epsabs=epsabs)
-            self.crossClsPlus[map1,map2,cParamNum] = Cls
-            self.crossClsPlus[map2,map1,cParamNum] = Cls #symmetric
-            ells,Cls = cp.getCl(myPksLower[cParamNum],myWinsLower[cParamNum],
-                                binNum1=map1,binNum2=map2,
-                                cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                                epsrel=epsrel,epsabs=epsabs)
-            self.crossClsMinus[map1,map2,cParamNum] = Cls
-            self.crossClsMinus[map2,map1,cParamNum] = Cls #symmetric
+    for cParamNum in range(nCosParams):
+        print 'calculating MatterPower and Window objects for ',\
+              paramList[cParamNum], ' derivative . . . '
+
+        # create MatterPower objects
+        myPksUpper = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
+                             nonlinear=nonlinear,**myParamsUpper[cParamNum])
+        myPksLower = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
+                             nonlinear=nonlinear,**myParamsLower[cParamNum])
+        # create Window objects
+        myWinsUpper = cp.Window(myPksUpper,zmin=zmin,zmax=zmax,
+                             nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
+                             dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
+                             BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
+        myWinsLower = cp.Window(myPksLower,zmin=zmin,zmax=zmax,
+                             nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
+                             dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
+                             BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
+
+
+        for map1 in range(nMaps):
+          if map1==0:
+            cor1 = cp.Window.kappa
+          else:
+            cor1 = cp.Window.galaxies
+          for map2 in range(map1,nMaps):
+            print '  starting angular cross power spectrum ',map1,', ',map2,'... '
+            if map2==0:
+              cor2 = cp.Window.kappa
+            else:
+              cor2 = cp.Window.galaxies
+            # since nonoverlapping bins have zero correlation use this condition:
+            if map1==0 or map1==map2 or not tophatBins:
+
+              # this part does not need to iterate over cParamNum
+              if cParamNum == 0:
+                ells,Cls = cp.getCl(myPk,myWin,binNum1=map1,binNum2=map2,
+                                   cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
+                                   epsrel=epsrel,epsabs=epsabs)
+                self.crossCls[map1,map2] = Cls
+                self.crossCls[map2,map1] = Cls #symmetric
+
+              # now the adjustments for numeric derivatives
+              #for cParamNum in range(nCosParams):
+              #ells,Cls = cp.getCl(myPksUpper[cParamNum],myWinsUpper[cParamNum],
+              ells,Cls = cp.getCl(myPksUpper,myWinsUpper,
+                                  binNum1=map1,binNum2=map2,
+                                  cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
+                                  epsrel=epsrel,epsabs=epsabs)
+              self.crossClsPlus[map1,map2,cParamNum] = Cls
+              self.crossClsPlus[map2,map1,cParamNum] = Cls #symmetric
+              #ells,Cls = cp.getCl(myPksLower[cParamNum],myWinsLower[cParamNum],
+              ells,Cls = cp.getCl(myPksLower,myWinsLower,
+                                  binNum1=map1,binNum2=map2,
+                                  cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
+                                  epsrel=epsrel,epsabs=epsabs)
+              self.crossClsMinus[map1,map2,cParamNum] = Cls
+              self.crossClsMinus[map2,map1,cParamNum] = Cls #symmetric
             
+        # ditch the MatterPower and Window objects
+        del myPksUpper
+        del myPksLower
+        del myWinsUpper
+        del myWinsLower
+
     self.ells = ells # = np.arange(lmin,lmax+1, dtype=np.float64)
 
     # this section needed for dCl/dAi or overlapping bins
@@ -441,8 +481,10 @@ class FisherMatrix:
         for paramNum in range(nCosParams):
             print 'getting Primary CMB Cl power spectra for parameter ', \
                   paramList[paramNum]
-            parsUpper = myPksUpper[paramNum].pars
-            parsLower = myPksLower[paramNum].pars
+            #parsUpper = myPksUpper[paramNum].pars
+            #parsLower = myPksLower[paramNum].pars
+            parsUpper = myParamsUpper[paramNum]
+            parsLower = myParamsLower[paramNum]
             parsUpper.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
             parsLower.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
             parsUpper.set_accuracy(AccuracyBoost=AccuracyBoost)
