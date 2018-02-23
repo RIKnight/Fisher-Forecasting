@@ -264,6 +264,8 @@ class FisherMatrix:
     #myPksLower = []
     #myWinsUpper = []
     #myWinsLower = []
+    myParsUpper = []
+    myParsLower = []
     for cParamNum in range(nCosParams):
       print 'creating matter power spectra and window functions for ',\
             paramList[cParamNum],' derivative...'
@@ -354,6 +356,9 @@ class FisherMatrix:
                              dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                              BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
 
+        # save pars for use in primary CMB
+        myParsUpper.append(myPksUpper.pars)
+        myParsLower.append(myPksLower.pars)
 
         for map1 in range(nMaps):
           if map1==0:
@@ -416,7 +421,7 @@ class FisherMatrix:
     for bin1 in range(nBins):
       for bin2 in range(bin1,nBins):
         if bin1==bin2 or not tophatBins:
-          print 'starting angular cross power spectrum ',bin1,', ',bin2,'... '
+          print 'starting angular cross power spectrum ',bin1+1,', ',bin2+1,'... '
           # kk
           ells,Cls = cp.getCl(myPk,myWin,binNum1=bin1+1,binNum2=bin2+1,
                            cor1=cp.Window.kappa,cor2=cp.Window.kappa,
@@ -483,8 +488,8 @@ class FisherMatrix:
                   paramList[paramNum]
             #parsUpper = myPksUpper[paramNum].pars
             #parsLower = myPksLower[paramNum].pars
-            parsUpper = myParamsUpper[paramNum]
-            parsLower = myParamsLower[paramNum]
+            parsUpper = myParsUpper[paramNum]
+            parsLower = myParsLower[paramNum]
             parsUpper.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
             parsLower.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
             parsUpper.set_accuracy(AccuracyBoost=AccuracyBoost)
