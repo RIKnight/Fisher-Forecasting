@@ -58,6 +58,9 @@
       Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.16
     Modified so MatterPower objects previously stored in myPksUpper and 
       myPksLower are used immediatly then discarded; ZK, 2018.02.17 
+    Added primary CMB Fisher functions to class MatterPower; 
+      Removed redundant Cl calculation since Sigma_i W_i = W is enforced
+      in crosspower.py, and A_i is fixed; ZK, 2018.02.19
 
 """
 
@@ -66,7 +69,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 #import scipy.integrate as sint
 from scipy.interpolate import interp1d
-#import camb
+import camb
 #from camb import model, initialpower
 #from scipy import polyfit,poly1d
 import crosspower as cp
@@ -98,7 +101,8 @@ class FisherMatrix:
 
   def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               biasByBin=True,AccuracyBoost=3,nonlinear=False,**cos_kwargs):
+               usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
+               nonlinear=False,**cos_kwargs):
     """
     
       Inputs:
@@ -121,6 +125,11 @@ class FisherMatrix:
             Defalut: False
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
+        usePrimaryCMB = True: set to True to include TT,TE,EE observables.
+          In this implementation, we assume that the T and E fields are not
+            correlated at all with the kappa and galaxies fields.
+            Thus, the correlation matrix can be split into two disjoint sections.
+          Default: False
         AccuracyBoost: to pass to set_accuracy to set accuracy
           Note that this sets accuracy globally, not just for this object
           Default: 3
@@ -181,6 +190,7 @@ class FisherMatrix:
     self.useWk = useWk
     self.binSmooth = binSmooth
     self.biasByBin = biasByBin
+    self.usePrimaryCMB = usePrimaryCMB
     self.nonlinear = nonlinear
     self.neutrino_hierarchy = cos_kwargs['neutrino_hierarchy']
 
@@ -192,10 +202,17 @@ class FisherMatrix:
 
     # observables list: defined as self.obsList; created along with self.covar
     nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+    if usePrimaryCMB:
+        nMapsP = 2 # T,E
+        nClsP = 3 # for TT,TE,EE (no crosses with k,g)
+        lminP = lmin #keep them the same for now
+        lmaxP = lmax #keep them the same for now
+        self.lminP = lminP
+        self.lmaxP = lmaxP
 
     # parameters list:
     nCosParams = 8 # 6 LCDM + Mnu + w
-    nParams = nCosParams+nBins
+    nParams = nCosParams+nBins # For lensing and galaxies, not primary
     paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu','w']
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
@@ -233,6 +250,8 @@ class FisherMatrix:
     #myPksLower = []
     #myWinsUpper = []
     #myWinsLower = []
+    myParsUpper = []
+    myParsLower = []
     for cParamNum in range(nCosParams):
       #print 'creating matter power spectra and window functions for ',\
       #      paramList[cParamNum],' derivative . . . '
@@ -323,6 +342,9 @@ class FisherMatrix:
                              dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                              BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
 
+        # save pars for use in primary CMB
+        myParsUpper.append(myPksUpper.pars)
+        myParsLower.append(myPksLower.pars)
 
         for map1 in range(nMaps):
           if map1==0:
@@ -368,6 +390,8 @@ class FisherMatrix:
             
     self.ells = ells
 
+    # this section needed for dCl/dAi or overlapping bins
+    """
     # divide K,G into bins and get crossClbins
     self.crossClBinsKK = np.zeros((nBins,nBins,lmax-lmin+1))
     self.crossClBinsKG = np.zeros((nBins,nBins,lmax-lmin+1))
@@ -380,7 +404,7 @@ class FisherMatrix:
     for bin1 in range(nBins):
       for bin2 in range(bin1,nBins):
         if bin1==bin2 or not tophatBins:
-          print '  starting angular cross power spectrum ',bin1,', ',bin2,'. . . '
+          print '  starting angular cross power spectrum',bin1+1,', ',bin2+1,'. . . '
           # kk
           ells,Cls = cp.getCl(myPk,myWin,binNum1=bin1+1,binNum2=bin2+1,
                            cor1=cp.Window.kappa,cor2=cp.Window.kappa,
@@ -399,6 +423,86 @@ class FisherMatrix:
                            lmin=lmin,lmax=lmax)
           self.crossClBinsGG[bin1,bin2] = Cls
           self.crossClBinsGG[bin2,bin1] = Cls #symmetric
+    """
+
+    # do the primary CMB component
+    # note: most of this is copied from above.  
+    #   Later I should consolidate the two versions into a function.
+    if usePrimaryCMB:
+        pars = myPk.pars
+        lensLmax = lmaxP #3*lmaxP
+        lpa = 5.0 # set_for_lmax also sets lensing 
+        #   to be non-linear if lens_potential_accuracy>0
+        pars.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
+        pars.set_accuracy(AccuracyBoost=AccuracyBoost) #note: global setting
+        
+        #calculate results for these parameters
+        print 'getting Cl power spectrum'
+        results = camb.get_results(pars)
+
+        #get dictionary of CAMB power spectra
+        powers =results.get_cmb_power_spectra(pars)
+
+        #get the total lensed CMB power spectra versus unlensed
+        #myClName = 'total'
+        myClName = 'unlensed_scalar'
+        myCl = powers[myClName]
+
+        # From pycamb:
+        #Python Cl arrays are all zero based (starting at L=0), 
+        #   Note L=0,1 entries will be zero by default.
+        #The different CL are always in the order TT, EE, BB, TE 
+        #   (with BB=0 for unlensed scalar results).
+
+        # re-arrange the data structure to be consistent with code in FisherMatrix
+        #nMapsP = 2 # T,E # defined above
+        self.crossClsP      = np.zeros((nMapsP,nMapsP,           lmaxP-lminP+1))
+        self.crossClsPPlus  = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
+        self.crossClsPMinus = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
+
+        self.crossClsP[0,0] = myCl[lminP:lmaxP+1,0] # TT
+        self.crossClsP[0,1] = myCl[lminP:lmaxP+1,3] # TE
+        self.crossClsP[1,0] = myCl[lminP:lmaxP+1,3] # ET
+        self.crossClsP[1,1] = myCl[lminP:lmaxP+1,1] # EE
+
+        # get the perturbed versions
+        for paramNum in range(nCosParams):
+            print 'getting Primary CMB Cl power spectra for parameter ', \
+                  paramList[paramNum]
+            #parsUpper = myPksUpper[paramNum].pars
+            #parsLower = myPksLower[paramNum].pars
+            parsUpper = myParsUpper[paramNum]
+            parsLower = myParsLower[paramNum]
+            parsUpper.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
+            parsLower.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
+            parsUpper.set_accuracy(AccuracyBoost=AccuracyBoost)
+            parsLower.set_accuracy(AccuracyBoost=AccuracyBoost)
+
+
+            #calculate results for these parameters
+            resultsUpper = camb.get_results(parsUpper)
+            resultsLower = camb.get_results(parsLower)
+
+            #get dictionary of CAMB power spectra
+            powersUpper =resultsUpper.get_cmb_power_spectra(parsUpper)
+            powersLower =resultsLower.get_cmb_power_spectra(parsLower)
+            
+            #get the selected power spectra
+            myClUpper=powersUpper[myClName]
+            myClLower=powersLower[myClName]
+            
+            #store them
+            self.crossClsPPlus[0,0,paramNum]  = myClUpper[lminP:lmaxP+1,0] # TT
+            self.crossClsPPlus[0,1,paramNum]  = myClUpper[lminP:lmaxP+1,3] # TE
+            self.crossClsPPlus[1,0,paramNum]  = myClUpper[lminP:lmaxP+1,3] # ET
+            self.crossClsPPlus[1,1,paramNum]  = myClUpper[lminP:lmaxP+1,1] # EE
+
+            self.crossClsPMinus[0,0,paramNum] = myClLower[lminP:lmaxP+1,0] # TT
+            self.crossClsPMinus[0,1,paramNum] = myClLower[lminP:lmaxP+1,3] # TE
+            self.crossClsPMinus[1,0,paramNum] = myClLower[lminP:lmaxP+1,3] # ET
+            self.crossClsPMinus[1,1,paramNum] = myClLower[lminP:lmaxP+1,1] # EE
+
+
 
 
 ################################################################################
@@ -439,6 +543,37 @@ class FisherMatrix:
     # need to do this to get indices in order that linalg.inv wants them
     self.invCov = np.transpose(np.linalg.inv(np.transpose(self.covar)))
 
+    # do the primary CMB component
+    # note: most of this is copied from above.  
+    #   Later I should consolidate the two versions into a function.
+    if usePrimaryCMB:
+        covarP = np.zeros((nClsP,nClsP,lmaxP-lminP+1))
+        ellsP = np.arange(lminP,lmaxP+1)
+
+        # create obsList to contain base nMaps representation of data label
+        obsListP = np.zeros(nClsP)
+
+        for map1 in range(nMapsP):
+            print 'starting Primary CMB covariance set ',map1+1,' of ',nMaps,'... '
+            for map2 in range(map1, nMapsP):
+                covIndex1 = map1*nMapsP+map2-map1*(map1+1)/2     # shortens the array
+                obsListP[covIndex1] = map1*nMapsP+map2  # base nMaps representation
+                for map3 in range(nMapsP):
+                  for map4 in range(map3, nMapsP):
+                    covIndex2 = map3*nMapsP+map4-map3*(map3+1)/2 # shortens the array
+                    if covIndex1 <= covIndex2:
+                      covarP[covIndex1,covIndex2] = ( \
+                            crossClsP[map1,map3]*crossClsP[map2,map4] + \
+                            crossClsP[map1,map4]*crossClsP[map2,map3] )/(2.*ellsP+1)
+                    else:   # avoid double calculation
+                      covarP[covIndex1,covIndex2] = covarP[covIndex2,covIndex1]
+        self.covarP = covarP
+        self.ellsP = ellsP
+        self.obsListP = obsListP # I probably won't use this... so why???
+        self.obsNamesP = ['TT','TE','EE']
+
+        self.invCovP = np.transpose(np.linalg.inv(np.transpose(self.covarP)))
+
 
 ################################################################################
     # get derivatives wrt parameters
@@ -465,14 +600,16 @@ class FisherMatrix:
             else:                  #kg,gk
               # this section assumes no bin overlap (update later)
               if pIdx+1 == map2: # +1 since 1 more map than bin
-                self.dClVecs[  mapIdx, bi] = 1/self.binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+                #self.dClVecs[  mapIdx, bi] = 1/self.binBs[pIdx] * self.crossClBinsKG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 1/self.binBs[pIdx] * self.crossCls[0,pIdx+1]
               else: # parameter index does not match bin index
                 self.dClVecs[  mapIdx, bi] = Clzeros
 
           else: #galaxies          #gg
             if pIdx+1 == map2: # +1 since 1 more map than bin
               if map1 == map2:
-                self.dClVecs[  mapIdx, bi] = 2/self.binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+                #self.dClVecs[  mapIdx, bi] = 2/self.binBs[pIdx] * self.crossClBinsGG[pIdx,pIdx]
+                self.dClVecs[  mapIdx, bi] = 2/self.binBs[pIdx] * self.crossCls[pIdx+1,pIdx+1]
               else:
                 # this section assumes no bin overlap (update later)
                 self.dClVecs[  mapIdx ,bi] = Clzeros 
@@ -490,6 +627,8 @@ class FisherMatrix:
 ################################################################################
     #Build Fisher matrix
     self.Fij = self.makeFisher(self.lmin,self.lmax)
+    if usePrimaryCMB:
+        self.FijTE = self.makeFisher(self.lminP,self.lmaxP,TE=True)
     print 'creation of Fisher Matrix complete!\n'
     # end of init function
 
@@ -499,7 +638,7 @@ class FisherMatrix:
 # other methods
 
 
-  def makeFisher(self,lmin,lmax,verbose=False):
+  def makeFisher(self,lmin,lmax,TE=False,verbose=False):
     """
       Purpose:
         multply vectorT,invcov,vector and add up
@@ -509,36 +648,55 @@ class FisherMatrix:
           must be GE self.lmin
         lmax: the highest ell to inlude in the sum
           must be LE self.lmax
+        TE: set to True to compute Fij for T,E instead of k,g
+          Default: False
         verbose: set to True to have extra output
           Default: False
       Returns:
         a Fisher Matrix, dimensions self.nParams x self.nParams
     """
-    if lmin < self.lmin or lmax > self.lmax:
-      print 'makeFisher: bad lmin or lmax!'
-      return 0
+    if TE:
+      if lmin < self.lminP or lmax > self.lmaxP:
+        print 'makeFisher: bad lminP or lmaxP!'
+        return 0
+      selfLmin = self.lminP
+      selfLmax = self.lmaxP
+      nParams = self.nParamsP
+      invCov = self.invCovP
+      dClVecs = self.dClVecsP
+
+    else:
+      if lmin < self.lmin or lmax > self.lmax:
+        print 'makeFisher: bad lmin or lmax!'
+        return 0
+      selfLmin = self.lmin
+      selfLmax = self.lmax
+      nParams = self.nParams
+      invCov = self.invCov
+      dClVecs = self.dClVecs
+    
     if verbose:
       print 'building Fisher matrix from components...'
-      print 'invCov.shape: ',self.invCov.shape,', dClVecs.shape: ',self.dClVecs.shape
-    nParams = self.nParams
+      print 'invCov.shape: ',invCov.shape,', dClVecs.shape: ',dClVecs.shape
+
     Fij = np.zeros((nParams,nParams)) # indices match those in paramList
     for i in range(nParams):
       if verbose:
         print 'starting bin set ',i+1,' of ',nParams
-      dClVec_i = self.dClVecs[:,i,:] # shape (nCls,nElls)
+      dClVec_i = dClVecs[:,i,:] # shape (nCls,nElls)
       for j in range(nParams):
-        dClVec_j = self.dClVecs[:,j,:] # shape (nCls,nElls)
+        dClVec_j = dClVecs[:,j,:] # shape (nCls,nElls)
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):
-
-          ellInd = ell+lmin-self.lmin # adjust ell to match indices in arrays
           
-          myCov = self.invCov[:,:,ellInd]
+          ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
+          
+          myCov = invCov[:,:,ellInd]
           fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
     return Fij
-    
 
+    
   def getBinCenters(self):
     """
       return array of centers of bins

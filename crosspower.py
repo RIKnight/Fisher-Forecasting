@@ -58,6 +58,9 @@
     Pulled myVar1, myVar2 up to MatterPower.__init__; 
       Added kludge to force binBKs (binAs) to all be 1; ZK, 2018.01.28
     Added neutrino_hierarchy output, AccuracyBoost record; ZK, 2018.02.16
+    Pulled hunits parameter up to makePkinterp and MatterPower init;
+      Added modelDNDZ3, from Schaan ea 2016, which has 3 params; 
+      Added beesBins to tophat; ZK, 2018.02.22
 
 """
 
@@ -123,7 +126,7 @@ class MatterPower:
 
   def __init__(self,nz=10000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,
                nonlinear=True,AccuracyBoost=3,myVar1=model.Transfer_tot,
-               myVar2=model.Transfer_tot,**cos_kwargs):
+               myVar2=model.Transfer_tot,hunits=False,**cos_kwargs):
     """
     
       Inputs:
@@ -141,6 +144,8 @@ class MatterPower:
           Note that this sets accuracy globally, not just for this object
         myVar1,myVar2: the variables to get power spectrum of
           Default: model.Transfer_tot for delta_tot
+        hunits: set to True to use h-units for k, P(k)
+          Default: False
         **cos_kwargs: the cosmological parameters for camb's set_cosmology
 
     """
@@ -179,7 +184,8 @@ class MatterPower:
     # make the PK interpolator (via camb)
     self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,w=w,
                       kPivot=kPivot,k_per_logint=k_per_logint,nonlinear=nonlinear,
-                      AccuracyBoost=AccuracyBoost,myVar1=myVar1,myVar2=myVar2)
+                      AccuracyBoost=AccuracyBoost,myVar1=myVar1,myVar2=myVar2,
+                      hunits=hunits)
 
 
 
@@ -236,7 +242,7 @@ class MatterPower:
   def makePKinterp(self,newPk=True,nz=10000,kmax=10,As=2.130e-9,ns=0.9653,r=0,
                    kPivot=0.05,w=-1,myVar1=model.Transfer_tot,
                    myVar2=model.Transfer_tot,k_per_logint=None,
-                   nonlinear=True,AccuracyBoost=3,**cos_kwargs):
+                   nonlinear=True,AccuracyBoost=3,hunits=False,**cos_kwargs):
     """
       example code from http://camb.readthedocs.io/en/latest/CAMBdemo.html
         (modified to have nz,kmax,myVar as inputs)
@@ -266,6 +272,8 @@ class MatterPower:
           Default: True
         AccuracyBoost: to pass to set_accuracy to set accuracy
           Note that this sets accuracy globally, not just for this object
+        hunits: set to True to use h-units for k, P(k)
+          Default: False
         **cos_kwargs: keyword args to pass to getPars and set_cosmology
           if not used, getPars will use object defaults
       Outputs:
@@ -297,15 +305,12 @@ class MatterPower:
     if return_z_k:
         self.PK, self.zArray, self.kArray = \
             camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
+            hubble_units=hunits, k_hunit=hunits, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar, return_z_k=return_z_k)
     else:
         self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-            hubble_units=False, k_hunit=False, kmax=kmax,k_per_logint=k_per_logint,
+            hubble_units=hunits, k_hunit=hunits, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar)
-        #self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
-        #    hubble_units=True, k_hunit=True, kmax=kmax,k_per_logint=k_per_logint,
-        #    var1=myVar1,var2=myVar2, zmax=self.zstar)
 
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'
@@ -548,8 +553,8 @@ def getDNDZratio(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
 def modelDNDZ(z,z0):
   """
     Purpose:
-      Implement an analytic function that can be used to approximate galaxy 
-        distributions of future galaxy surveys
+      Implement a 1 parameter analytic function that can be used to 
+        approximate galaxy distributions of future galaxy surveys
     Inputs:
       z:  the redshift(s) at which dN/dz is evaluated
       z0: the control of the width and extent of the distribution
@@ -563,7 +568,30 @@ def modelDNDZ(z,z0):
   return 1/(2*z0) * (zRatio)**2 * np.exp(-1*zRatio)
 
 
-def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False):
+def modelDNDZ3(z,z0=0.5,alpha=1.27,beta=1.02):
+  """
+    Purpose:
+      Implement a 3-parameter analytic function that can be used to 
+        approximate galaxy distributions of future galaxy surveys
+    Notes:
+      This is the form used by Schaan et. al. 2016
+      Params for LSST:   alpha=1.27,beta=1.02,z0=0.5
+      Params for Euclid: alpha=1.3, beta=1.5, z0=0.65
+      Params for WFIRST: alpha=1.27,beta=1.02,z0=0.6
+    Inputs:
+      z:  the redshift(s) at which dN/dz is evaluated
+      z0: the control of the width and extent of the distribution
+      alpha,beta: exponents in formula controlling shape of function
+    Returns:
+      magnitude of dN/dz at redshift z
+  """
+  # cast z0 as float
+  z0 *= 1.0
+  zRatio = z/z0
+  return z**alpha * np.exp(-1* zRatio**beta)
+
+
+def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
   """
   Purpose:
     multiply function by tophat to get a slice of the function
@@ -579,12 +607,24 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False):
       on each end of bin in set of nonzero values returned; 
       useful for interpolation over entire bin if bin edges are not included in zs
       Default: False
+    beesBins: a hack to make non-equally sized bins, to match Byeonghee's bins.
+      If true, bin edges will be 0,0.5,1,2,3,4,7. 
+      nBins must be 6 or an error will be raised and 0 will be returned.
+      Default: False
   Returns:
     Tophat slice of FofZ function
 
   """
   myFofZ = FofZ
-  binEdges = np.linspace(zmin,zmax,nBins+1)
+  if beesBins:
+    if nBins == 6:
+      binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+    else:
+      print '!!!!! wrong nBins for beesBins detected !!!!!'
+      return 0
+  else:
+    binEdges = np.linspace(zmin,zmax,nBins+1)
+
   if binNum != 0:
     #myDNDZ[np.where(z< binEdges[binNum-1])] = 0
     #myDNDZ[np.where(z>=binEdges[binNum  ])] = 0
@@ -1473,10 +1513,10 @@ def getCl(myPk,myWin,binNum1=0,binNum2=0,cor1=Window.kappa,cor2=Window.kappa,
       myPk: a MatterPower object
       myWin: a Window object that was made with the same MatterPower object
       binNum1,binNum2: index indicating which bin to use
-        If dndzMode = 1:
+        If myWin.dndzMode = 1:
           integer in {0,1,2,3,4,5}
           curves from fig.3 of Crocce et al 2016.
-        if dndzMode = 2:
+        if myWin.dndzMode = 2:
           integer in {0,1,...,nBins-1,nBins}
         Index=0 indicates sum of all other curves
       cor1,cor2: the names of the two fields to cross-correlate
@@ -1797,7 +1837,7 @@ def plotGGsum(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
 
 def plotModelDNDZ(z0=0.3,zmax=4):
   """
-  plot the DNDZ model
+  plot the DNDZ models
   Inputs:
     z0: the width control
       Default: 0.3 (used by LSST sci.book)
@@ -1806,6 +1846,7 @@ def plotModelDNDZ(z0=0.3,zmax=4):
   """
   zs = np.linspace(0,zmax,100)
   plt.plot(zs,modelDNDZ(zs,z0))
+  plt.plot(zs,modelDNDZ3(zs))
   plt.show()
 
 
