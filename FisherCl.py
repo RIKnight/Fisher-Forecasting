@@ -66,6 +66,8 @@
       Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.12
     Modified so MatterPower objects previously stored in myPksUpper and 
       myPksLower are used immediatly then discarded; ZK, 2018.02.18 
+    Fixed missing self. on self.crossClsP and other fixes 
+      for primary CMB; ZK, 2018.02.23
 
 """
 
@@ -227,6 +229,7 @@ class FisherMatrix:
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
     self.nParams   = nParams
+    self.nCosParams = nCosParams
     self.paramList = paramList
 
     # step sizes for discrete derivatives: must correspond to paramList entries!
@@ -578,8 +581,9 @@ class FisherMatrix:
                     covIndex2 = map3*nMapsP+map4-map3*(map3+1)/2 # shortens the array
                     if covIndex1 <= covIndex2:
                       covarP[covIndex1,covIndex2] = ( \
-                            crossClsP[map1,map3]*crossClsP[map2,map4] + \
-                            crossClsP[map1,map4]*crossClsP[map2,map3] )/(2.*ellsP+1)
+                        self.crossClsP[map1,map3]*self.crossClsP[map2,map4] + \
+                        self.crossClsP[map1,map4]*self.crossClsP[map2,map3] )/ \
+                        (2.*ellsP+1)
                     else:   # avoid double calculation
                       covarP[covIndex1,covIndex2] = covarP[covIndex2,covIndex1]
         self.covarP = covarP
@@ -693,7 +697,7 @@ class FisherMatrix:
         return 0
       selfLmin = self.lminP
       selfLmax = self.lmaxP
-      nParams = self.nParamsP
+      nParams = self.nCosParams
       invCov = self.invCovP
       dClVecs = self.dClVecsP
 
