@@ -715,8 +715,8 @@ class FisherMatrix:
             for map2 in range(map1,nMapsP):
                 mapIdx  = map1*nMapsP+map2 -map1*(map1+1)/2  # mapIdx = map index
                 for pIdx in range(nCosParams):
-                    dClPlus  = crossClsPPlus[map1,map2,pIdx]
-                    dClMinus = crossClsPMinus[map1,map2,pIdx]
+                    dClPlus  = self.crossClsPPlus[map1,map2,pIdx]
+                    dClMinus = self.crossClsPMinus[map1,map2,pIdx]
                     dClVecsP[mapIdx, pIdx] = (dClPlus-dClMinus)/(2*deltaP[pIdx])
         self.dClVecsP = dClVecsP
 
