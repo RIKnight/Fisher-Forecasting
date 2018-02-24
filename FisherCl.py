@@ -61,6 +61,9 @@
     Added primary CMB Fisher functions to class MatterPower; 
       Removed redundant Cl calculation since Sigma_i W_i = W is enforced
       in crosspower.py, and A_i is fixed; ZK, 2018.02.19
+    Fixed missing self. on self.crossClsP and other fixes 
+      for primary CMB; ZK, 2018.02.23
+    Added noise to primary CMB as useNoise param; ZK, 2018.02.24
 
 """
 
@@ -83,6 +86,81 @@ import crosspower as cp
 
 
 
+################################################################################
+# CMB noise
+
+# These implement equation 26 from CosmicFish implementation notes V1.0
+def beamSig2(fwhm1,fwhm2):
+    """
+    Input:
+        fwhm1,2: the beam FWHMs in arcminutes
+          For TT or EE, these will be the same, for TE they may not be
+    Returns:
+        fwhm scaled and squared
+    """
+    return fwhm1*fwhm2* (np.pi/10800)**2 / (8*np.log(2))
+
+def beamVar(fwhm1,fwhm2,ST1,ST2):
+    """
+    Inputs:
+        fwhm1,2: the beam FWHMs in arcminutes
+          For TT or EE, these will be the same, for TE they may not be
+        ST1,2: DeltaT/T, the temperature sensitivities in 10^-6 microK/K
+          (See table 1.3 from Planck bluebook)
+          Or, this can be used to represent SP, the polarization sensitivity
+          For TT or EE, these will be the same, for TE they may not be
+    Returns:
+        sensitivity squared, in (10^-6 microK*radians)^2 (huh?)
+    """
+    Tcmb = 2.7260   # +/- 0.0013; Fixsen 2009
+    return ST1*fwhm1* ST2*fwhm2* (Tcmb*np.pi/10800)**2
+
+def noisePowerMultiChannel(fwhm1s,fwhm2s,ST1s,ST2s,ells):
+    """
+    Purpose:
+        Find the total noise power for a multi-channel CMB instrument
+    Inputs:
+        fwhm1s,2s: arrays of FWHMs
+          Length is for the number of channels
+        ST1s,S2s: arrays of STs
+          Length is for the number of channels
+        ells: array of ell values to calculate noise at
+    Returns:
+        Array of total noise power at each ell value
+    """
+    nChannels = fwhm1s.__len__()
+    mySums = np.zeros(ells.__len__()) 
+
+    for chInd in range(nChannels):
+        myBeamSig2 = beamSig2(fwhm1s[chInd],fwhm2s[chInd])
+        myBeamVar  = beamVar(fwhm1s[chInd],fwhm2s[chInd],ST1s[chInd],ST2s[chInd])
+        for ellIndex,ell in enumerate(ells):
+            mySums[ellIndex] += np.exp(-1*ell*(ell+1)*myBeamSig2)/myBeamVar
+    return 1./mySums
+    
+
+# this function is for noise on the single temperature map level
+#  from CMB-S4 science book (first edition) equation 8.23
+def noisePower(ST1,ST2,fwhm,ells):
+    """
+    Purpose:
+        Find the total noise power for a single-channel CMB instrument
+    Inputs:
+        ST1,ST2: the map sensitivity DeltaT (or DeltaP) in microK-arcmin
+          For TT or EE these will be the same, for TE they will not
+        fwhm: the FWHM of the beam in arcmin
+        ells: array of ell values to calculate noise at
+    Returns:
+        Array of total noise power at each ell value in microK^2
+    """
+    noise_l = np.empty(ells.__len__(),dtype='float64')
+    fwhmFac = (fwhm*np.pi/10800)**2/(8*np.log(2))
+    #print 'fwhmFac: ',fwhmFac
+    for ellIndex, ell in enumerate(ells):
+        noise_l[ellIndex] = ST1*ST2* np.exp(ell*(ell+1)*fwhmFac)
+        #
+    return noise_l*(np.pi/10800)**2
+
 
 
 ################################################################################
@@ -102,7 +180,7 @@ class FisherMatrix:
   def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
                nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
                usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
-               nonlinear=False,**cos_kwargs):
+               nonlinear=False,useNoise=True,**cos_kwargs):
     """
     
       Inputs:
@@ -135,6 +213,8 @@ class FisherMatrix:
           Default: 3
         nonlinear: set to True to use Halofit for nonlinear evolution.
           Default: False
+        useNoise: set to True to add noise to primary CMB
+          Default: True
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
@@ -217,6 +297,7 @@ class FisherMatrix:
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
     self.nParams   = nParams
+    self.nCosParams = nCosParams
     self.paramList = paramList
 
     # step sizes for discrete derivatives: must correspond to paramList entries!
@@ -563,8 +644,9 @@ class FisherMatrix:
                     covIndex2 = map3*nMapsP+map4-map3*(map3+1)/2 # shortens the array
                     if covIndex1 <= covIndex2:
                       covarP[covIndex1,covIndex2] = ( \
-                            crossClsP[map1,map3]*crossClsP[map2,map4] + \
-                            crossClsP[map1,map4]*crossClsP[map2,map3] )/(2.*ellsP+1)
+                        self.crossClsP[map1,map3]*self.crossClsP[map2,map4] + \
+                        self.crossClsP[map1,map4]*self.crossClsP[map2,map3] )/ \
+                        (2.*ellsP+1)
                     else:   # avoid double calculation
                       covarP[covIndex1,covIndex2] = covarP[covIndex2,covIndex1]
         self.covarP = covarP
@@ -621,7 +703,23 @@ class FisherMatrix:
           dClPlus  = self.crossClsPlus[map1,map2,pIdx]
           dClMinus = self.crossClsMinus[map1,map2,pIdx]
           self.dClVecs[mapIdx, pIdx] = (dClPlus-dClMinus)/(2*deltaP[pIdx])
-    
+
+    # do the primary CMB component
+    # note: most of this is copied from above.  
+    #   Later I should consolidate the two versions into a function.
+    if usePrimaryCMB:
+        dClVecsP = np.empty((nClsP, nCosParams, lmaxP-lminP+1))
+
+        for map1 in range(nMapsP):
+            print 'starting primary CMB derivative set ',map1+1,' of ',nMapsP,'... '
+            for map2 in range(map1,nMapsP):
+                mapIdx  = map1*nMapsP+map2 -map1*(map1+1)/2  # mapIdx = map index
+                for pIdx in range(nCosParams):
+                    dClPlus  = crossClsPPlus[map1,map2,pIdx]
+                    dClMinus = crossClsPMinus[map1,map2,pIdx]
+                    dClVecsP[mapIdx, pIdx] = (dClPlus-dClMinus)/(2*deltaP[pIdx])
+        self.dClVecsP = dClVecsP
+
 
 
 ################################################################################
@@ -631,7 +729,6 @@ class FisherMatrix:
         self.FijTE = self.makeFisher(self.lminP,self.lmaxP,TE=True)
     print 'creation of Fisher Matrix complete!\n'
     # end of init function
-
 
 
 ################################################################################
@@ -661,7 +758,7 @@ class FisherMatrix:
         return 0
       selfLmin = self.lminP
       selfLmax = self.lmaxP
-      nParams = self.nParamsP
+      nParams = self.nCosParams
       invCov = self.invCovP
       dClVecs = self.dClVecsP
 
@@ -1105,6 +1202,111 @@ def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,**cos_kwargs
   plt.show()
     
   return eigs, fidAs, fidBs, sigmaAs, sigmaBs
+
+
+def plotNoisePower():
+    """
+    Purpose: plot noise powers to verify code accuracy
+        Data from table 1 and comparison is against figure 1 from
+          Ma, 2017; arxiv:1707.03348
+
+    """
+    # select some ell values to use; don't need them all!
+    myElls = np.floor(np.logspace(0,4,100))
+
+    def atr(arcmin):
+        # converts arcmin to radians
+        return arcmin*np.pi/10800
+
+    # get noise powers
+    print 'calculating temperature noise powers...'
+    # Planck
+    fwhm = 5; ST = 47
+    noisePlanck = noisePower(ST,ST,fwhm,myElls)
+    # CMBS4 v1
+    fwhm = 3; ST = 3
+    noiseCMBS41 = noisePower(ST,ST,fwhm,myElls)
+    # CMBS4 v2
+    fwhm = 1; ST = 3
+    noiseCMBS42 = noisePower(ST,ST,fwhm,myElls)
+    # CMBS4 v3
+    fwhm = 3; ST = 1
+    noiseCMBS43 = noisePower(ST,ST,fwhm,myElls)
+    # CMBS4 v4
+    fwhm = 1; ST = 1
+    noiseCMBS44 = noisePower(ST,ST,fwhm,myElls)
+
+    # get CMB T spectrum
+    print 'skipping CMB T for now.'
+
+    # plot them
+    ellConv = myElls*(myElls+1)/(2*np.pi)
+    plt.loglog(myElls,noisePlanck*ellConv,label='Planck')
+    plt.loglog(myElls,noiseCMBS41*ellConv,label='CMB-S4 v1')
+    plt.loglog(myElls,noiseCMBS42*ellConv,label='CMB-S4 v2')
+    plt.loglog(myElls,noiseCMBS43*ellConv,label='CMB-S4 v3')
+    plt.loglog(myElls,noiseCMBS44*ellConv,label='CMB-S4 v4')
+
+
+    plt.ylim((1e-8,3e4))
+    plt.xlim((2,1e4))
+    plt.xlabel(r'$\ell$')
+    plt.ylabel(r'$\ell(\ell+1)N_{\ell} / 2\pi [\mu K^2]$')
+    plt.title('Temperature noise model for Planck and CMB-S4 versions')
+    plt.legend()
+    print 'plotting'
+    plt.show()
+    print 'done'
+
+
+def plotNoisePowerMulti():
+    """
+    Purpose: plot noise powers to verify code accuracy
+    Uses: noisePowerMultiChannel
+
+    """
+    # some testing data for the most sensitive / smallest beam Planck detectors
+    # Similar to Planck Bluebook values, but actually from CosmicFish
+    # 100 GHz channel
+    ST100 = 2.5
+    PT100 = 4.0
+    FWHM100 = 10.0
+    # 143 GHz channel
+    ST143 = 2.2
+    PT143 = 4.2
+    FWHM143 = 7.1
+    # 217 GHz channel
+    ST217 = 4.8
+    PT217 = 9.8
+    FWHM217 = 5.0
+
+    # form into vectors that noisePowerMultiChannel wants
+    ST_vec = [ST100,ST143,ST217]
+    PT_vec = [PT100,PT143,PT217]
+    FWHM_vec = [FWHM100,FWHM143,FWHM217]
+
+    # select some ell values to use; don't need them all!
+    myElls = np.floor(np.logspace(0,4,100))
+
+    #TT
+    NlTT = noisePowerMultiChannel(FWHM_vec,FWHM_vec,ST_vec,ST_vec,myElls)
+    #TP
+    NlTP = noisePowerMultiChannel(FWHM_vec,FWHM_vec,ST_vec,PT_vec,myElls)
+    #PP
+    NlPP = noisePowerMultiChannel(FWHM_vec,FWHM_vec,PT_vec,PT_vec,myElls)
+
+    # plot them
+    plt.loglog(myElls,NlTT,label=r'$N_\ell^{TT}$')
+    plt.loglog(myElls,NlTP,label=r'$N_\ell^{TP}$')
+    plt.loglog(myElls,NlPP,label=r'$N_\ell^{PP}$')
+
+    plt.ylim((1e-8,3e4))
+    plt.xlim((2,1e4))
+    plt.xlabel(r'$\ell$')
+    plt.ylabel(r'$\ell(\ell+1)N_{\ell} / 2\pi [\mu K^2]$')
+    plt.title('Temperature noise model for Planck multi-channel T,P')
+    plt.legend()
+    plt.show()
 
 
 ################################################################################
