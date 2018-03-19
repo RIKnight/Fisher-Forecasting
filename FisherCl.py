@@ -63,7 +63,10 @@
       in crosspower.py, and A_i is fixed; ZK, 2018.02.19
     Fixed missing self. on self.crossClsP and other fixes 
       for primary CMB; ZK, 2018.02.23
-    Added noise to primary CMB as useNoise param; ZK, 2018.02.24
+    Added noise to kappa, galxies, and primary CMB; control via useNoise param; 
+      Consolidated makeCovar codes to a function; 
+      Raised lminP, lmaxP to init parameters; ZK, 2018.03.10
+     
 
 """
 
@@ -76,6 +79,7 @@ import camb
 #from camb import model, initialpower
 #from scipy import polyfit,poly1d
 import crosspower as cp
+import noiseCl as ncl
 
 # Dan Coe's CLtools (confidence limit; c2009), for Fisher Matrix, etc.
 #import CLtools as cl 
@@ -83,83 +87,6 @@ import crosspower as cp
 ################################################################################
 # some functions
 
-
-
-
-################################################################################
-# CMB noise
-
-# These implement equation 26 from CosmicFish implementation notes V1.0
-def beamSig2(fwhm1,fwhm2):
-    """
-    Input:
-        fwhm1,2: the beam FWHMs in arcminutes
-          For TT or EE, these will be the same, for TE they may not be
-    Returns:
-        fwhm scaled and squared
-    """
-    return fwhm1*fwhm2* (np.pi/10800)**2 / (8*np.log(2))
-
-def beamVar(fwhm1,fwhm2,ST1,ST2):
-    """
-    Inputs:
-        fwhm1,2: the beam FWHMs in arcminutes
-          For TT or EE, these will be the same, for TE they may not be
-        ST1,2: DeltaT/T, the temperature sensitivities in 10^-6 microK/K
-          (See table 1.3 from Planck bluebook)
-          Or, this can be used to represent SP, the polarization sensitivity
-          For TT or EE, these will be the same, for TE they may not be
-    Returns:
-        sensitivity squared, in (10^-6 microK*radians)^2 (huh?)
-    """
-    Tcmb = 2.7260   # +/- 0.0013; Fixsen 2009
-    return ST1*fwhm1* ST2*fwhm2* (Tcmb*np.pi/10800)**2
-
-def noisePowerMultiChannel(fwhm1s,fwhm2s,ST1s,ST2s,ells):
-    """
-    Purpose:
-        Find the total noise power for a multi-channel CMB instrument
-    Inputs:
-        fwhm1s,2s: arrays of FWHMs
-          Length is for the number of channels
-        ST1s,S2s: arrays of STs
-          Length is for the number of channels
-        ells: array of ell values to calculate noise at
-    Returns:
-        Array of total noise power at each ell value
-    """
-    nChannels = fwhm1s.__len__()
-    mySums = np.zeros(ells.__len__()) 
-
-    for chInd in range(nChannels):
-        myBeamSig2 = beamSig2(fwhm1s[chInd],fwhm2s[chInd])
-        myBeamVar  = beamVar(fwhm1s[chInd],fwhm2s[chInd],ST1s[chInd],ST2s[chInd])
-        for ellIndex,ell in enumerate(ells):
-            mySums[ellIndex] += np.exp(-1*ell*(ell+1)*myBeamSig2)/myBeamVar
-    return 1./mySums
-    
-
-# this function is for noise on the single temperature map level
-#  from CMB-S4 science book (first edition) equation 8.23
-def noisePower(ST1,ST2,fwhm,ells):
-    """
-    Purpose:
-        Find the total noise power for a single-channel CMB instrument
-    Inputs:
-        ST1,ST2: the map sensitivity DeltaT (or DeltaP) in microK-arcmin
-          For TT or EE these will be the same, for TE they will not
-        fwhm: the FWHM of the beam in arcmin
-        ells: array of ell values to calculate noise at
-    Returns:
-        Array of total noise power at each ell value in microK^2
-    """
-    noise_l = np.empty(ells.__len__(),dtype='float64')
-    fwhmFac = (fwhm*np.pi/10800)**2/(8*np.log(2))
-    #print 'fwhmFac: ',fwhmFac
-    for ellIndex, ell in enumerate(ells):
-        noise_l[ellIndex] = ST1*ST2* np.exp(ell*(ell+1)*fwhmFac)
-        #
-    return noise_l*(np.pi/10800)**2
 
 
 
@@ -177,17 +104,18 @@ class FisherMatrix:
   """
 
 
-  def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
-               nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
+  def __init__(self,nz=10000,lmin=2,lmax=3000,zmin=0.0,zmax=16.0,dndzMode=2, 
+               nBins=10,z0=0.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
                usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
-               nonlinear=False,useNoise=True,**cos_kwargs):
+               nonlinear=False,useNoise=True,lminP=2,lmaxP=5000,**cos_kwargs):
     """
     
       Inputs:
         nz: the number of z points to use between here and last scattering surface
           Important usage is as the number of points to use in approximation of
             C_l integrals
-        lmin,lmax: minimum,maximum ell value to use in summations
+        lmin,lmax: minimum,maximum ell value to use in k,g summations
+        lminP,lmaxP: minimum,maximum ell value to use in T,E summations
         zmin,zmax: minimum,maximum z to use in binning for A_i, b_i parameters
         doNorm: set to True to normalize dN/dz.
           Default: True
@@ -199,6 +127,7 @@ class FisherMatrix:
           nBins: number of bins to create
             Default: 10
           z0: controls width of full dNdz distribution
+            Defalut: 0.5, for use with cp.modelDNDZ3 for LSST distribution
           useWk: set to True to use W^kappa as dN/dz
             Defalut: False
           binSmooth: parameter that controls the amount of smoothing of bin edges
@@ -265,6 +194,8 @@ class FisherMatrix:
     self.z0 = z0
     self.lmin = lmin
     self.lmax = lmax
+    self.lminP = lminP
+    self.lmaxP = lmaxP
     self.AccuracyBoost=AccuracyBoost
     self.doNorm = doNorm
     self.useWk = useWk
@@ -278,18 +209,24 @@ class FisherMatrix:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
       tophatBins = False
+    
+    # observables lists
+    # self.obsList, obsListP created along with self.covar, covarP
     nMaps = nBins+1 # +1 for kappa map
-
-    # observables list: defined as self.obsList; created along with self.covar
     nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+    self.fieldNames = ['k']
+    for binNum in range(1,nBins+1):
+        self.fieldNames.append('g'+str(binNum))
+    self.obsNames = []
+    for map1 in range(nMaps):
+      for map2 in range(map1, nMaps):
+        self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
     if usePrimaryCMB:
         nMapsP = 2 # T,E
         nClsP = 3 # for TT,TE,EE (no crosses with k,g)
-        lminP = lmin #keep them the same for now
-        lmaxP = lmax #keep them the same for now
-        self.lminP = lminP
-        self.lmaxP = lmaxP
-
+        self.fieldNamesP = ['T','E']
+        self.obsNamesP = ['TT','TE','EE']    
+    
     # parameters list:
     nCosParams = 8 # 6 LCDM + Mnu + w
     nParams = nCosParams+nBins # For lensing and galaxies, not primary
@@ -303,7 +240,7 @@ class FisherMatrix:
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
     #deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
-    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05] #mnu one in eV
+    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.005] #mnu one in eV
 
     # get MatterPower object
     print 'creating MatterPower object . . . '
@@ -583,78 +520,102 @@ class FisherMatrix:
             self.crossClsPMinus[1,0,paramNum] = myClLower[lminP:lmaxP+1,3] # ET
             self.crossClsPMinus[1,1,paramNum] = myClLower[lminP:lmaxP+1,1] # EE
 
+        self.ellsP = np.arange(lminP,lmaxP+1, dtype=np.float64)
+
+
+################################################################################
+    # create noise arrays
+    if useNoise:
+        print 'creating noise arrays... '
+
+        print 'getting (EB) lensing reconstruction noise... '
+        # noise levels from a possible CMB-S4 design:
+        nlev_t     = 1.   # temperature noise level, in uK.arcmin.
+        nlev_p     = 1.414   # polarization noise level, in uK.arcmin.
+        beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
+
+        ells,EB_noise = ncl.getRecNoise(self.lmax,nlev_t,nlev_p,beam_fwhm)
+
+        # convert Nl^dd to Nl^kk
+        # use Cl^kk = 1/4*[l*(l+1)]^2 * Cl^phiphi?
+        # but d is in between k and phi, so...?
+        # Scratch that.
+        # Assume output of quicklens is Cl^phiphi
+        Nlkk = EB_noise * (ells*(ells+1)/2)**2
+
+
+        print 'getting galaxy shot noise... '
+        # From Schaan et. al.: LSST n_source = 26/arcmin^2 for full survey
+        #nbar = 26 # arcmin^-2
+        nbar = 66 # 66 arcmin^-2 to match Bye's value
+
+        # the selection of beesBins must be consistent with that which is selected in cp.tophat
+        beesBins = True
+        if beesBins:
+            binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+            nBins = 6
+        else:
+            binEdges = np.linspace(self.zmin,self.zmax,self.nBins+1)
+            nBins = self.nBins
+
+        # the selection of dndz function must be consistent with that which is selected in cp.getDNDZinterp
+        # myDNDZ must be a function only of z
+        #myDNDZ = lambda z: cp.modelDNDZ(z,z0)
+        myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
+
+        N_gg = ncl.shotNoise(nbar,binEdges,myDNDZ=myDNDZ)
 
 
 
+        # create noiseCls array to accompany crossCls: 
+        #  Nl^kk will be reconstruction noise
+        #  Nl^gigi will be shot noise
+        #  Nl^kg, Nl^gigj are zero because noise is uncorrelated
+        self.noiseCls = np.zeros(self.crossCls.shape)
+        self.noiseCls[0,0] = Nlkk[self.lmin:self.lmax+1]
+        for binNum in range(nBins):
+            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
+
+        if usePrimaryCMB:
+            print 'getting (primary CMB) detector noise...'
+            # CMBS4 v1
+            fwhm = 1; ST = 1; SP = ST*1.414
+            noiseCMBS4_TT1 = ncl.noisePower(ST,ST,fwhm,self.ellsP)
+            noiseCMBS4_TP1 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
+            noiseCMBS4_PP1 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
+
+            # CMBS4 v2
+            #fwhm = 2; ST = 1; SP = ST*1.414
+            #noiseCMBS4_TT2 = ncl.noisePower(ST,ST,fwhm,self.ellsP)
+            #noiseCMBS4_TP2 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
+            #noiseCMBS4_PP2 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
+
+            # shape like crossCls
+            noiseCls1 = np.array([[noiseCMBS4_TT1,noiseCMBS4_TP1],[noiseCMBS4_TP1,noiseCMBS4_PP1]])
+            #noiseCls2 = np.array([[noiseCMBS4_TT2,noiseCMBS4_TP2],[noiseCMBS4_TP2,noiseCMBS4_PP2]])
+
+            # pick one
+            self.noiseClsP = noiseCls1
+    
+    else: # no noise
+        self.noiseCls = np.zeros(self.crossCls.shape)
+        if usePrimaryCMB:
+            self.noiseClsP = np.zeros(self.crossClsP.shape)
+   
+    
+    
+    
 ################################################################################
     # create covariance matrix
     print 'building covariance matrix... '
 
-    #nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
-    # nCls defined above
-    self.covar = np.zeros((nCls,nCls,lmax-lmin+1))
-
-    # create obsList to contain base nMaps representation of data label
-    #   where kappa:0, g1:1, g2:2, etc.
-    #   eg, C_l^{kappa,g1} -> 0*nMaps+1 = 01 = 1
-    self.fieldNames = ['k']
-    for binNum in range(1,nBins+1):
-        self.fieldNames.append('g'+str(binNum))
-    self.obsList = np.zeros(nCls)
-    self.obsNames = []
-
-    for map1 in range(nMaps):
-      print 'starting covariance set ',map1+1,' of ',nMaps,'... '
-      for map2 in range(map1, nMaps):
-        covIndex1 = map1*nMaps+map2-map1*(map1+1)/2     # shortens the array
-        self.obsList[covIndex1] = map1*nMaps+map2       # base nMaps representation
-        self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
-        for map3 in range(nMaps):
-          for map4 in range(map3, nMaps):
-            covIndex2 = map3*nMaps+map4-map3*(map3+1)/2 # shortens the array
-            if covIndex1 <= covIndex2:
-              #self.covar[covIndex1,covIndex2] = (self.crossCls[map1,map2]*self.crossCls[map3,map4] + self.crossCls[map1,map4]*self.crossCls[map3,map2] )/(2.*self.ells+1)
-              self.covar[covIndex1,covIndex2] = (self.crossCls[map1,map3]*self.crossCls[map2,map4] + self.crossCls[map1,map4]*self.crossCls[map2,map3] )/(2.*self.ells+1)
-            else:                                       # avoid double calculation
-              self.covar[covIndex1,covIndex2] = self.covar[covIndex2,covIndex1]
-
-    # invert covariance matrix
-    print 'inverting covariance matrix... '
-    # transpose of inverse of transpose is inverse of original
-    # need to do this to get indices in order that linalg.inv wants them
-    self.invCov = np.transpose(np.linalg.inv(np.transpose(self.covar)))
-
-    # do the primary CMB component
-    # note: most of this is copied from above.  
-    #   Later I should consolidate the two versions into a function.
+    # need noiseCls before running this
+    self.covar,self.invCov,self.ells,self.obsList = \
+        self.makeCovar(self.crossCls,self.noiseCls,self.lmin,self.lmax)
     if usePrimaryCMB:
-        covarP = np.zeros((nClsP,nClsP,lmaxP-lminP+1))
-        ellsP = np.arange(lminP,lmaxP+1)
-
-        # create obsList to contain base nMaps representation of data label
-        obsListP = np.zeros(nClsP)
-
-        for map1 in range(nMapsP):
-            print 'starting Primary CMB covariance set ',map1+1,' of ',nMaps,'... '
-            for map2 in range(map1, nMapsP):
-                covIndex1 = map1*nMapsP+map2-map1*(map1+1)/2     # shortens the array
-                obsListP[covIndex1] = map1*nMapsP+map2  # base nMaps representation
-                for map3 in range(nMapsP):
-                  for map4 in range(map3, nMapsP):
-                    covIndex2 = map3*nMapsP+map4-map3*(map3+1)/2 # shortens the array
-                    if covIndex1 <= covIndex2:
-                      covarP[covIndex1,covIndex2] = ( \
-                        self.crossClsP[map1,map3]*self.crossClsP[map2,map4] + \
-                        self.crossClsP[map1,map4]*self.crossClsP[map2,map3] )/ \
-                        (2.*ellsP+1)
-                    else:   # avoid double calculation
-                      covarP[covIndex1,covIndex2] = covarP[covIndex2,covIndex1]
-        self.covarP = covarP
-        self.ellsP = ellsP
-        self.obsListP = obsListP # I probably won't use this... so why???
-        self.obsNamesP = ['TT','TE','EE']
-
-        self.invCovP = np.transpose(np.linalg.inv(np.transpose(self.covarP)))
+        self.covarP,self.invCovP,self.ellsP,self.obsListP = \
+            self.makeCovar(self.crossClsP,self.noiseClsP,self.lminP,self.lmaxP)
+    
 
 
 ################################################################################
@@ -733,6 +694,59 @@ class FisherMatrix:
 
 ################################################################################
 # other methods
+
+  def makeCovar(self,crossCls,noiseCls,lmin,lmax):
+    """
+    Purpose: make a covariance matrix
+    Inputs:
+        crossCls:
+        noiseCls:
+        lmin:
+        lmax:
+    Returns: 
+        covar,invCov,ells,obsList
+    """
+    # start by finding sizes
+    nMaps = crossCls.shape[0]
+    nCls = nMaps*(nMaps+1)/2
+    
+    # create return objects
+    covar = np.zeros((nCls,nCls,lmax-lmin+1))
+    ells = np.arange(lmin,lmax+1)
+
+    # create obsList to contain base nMaps representation of data label
+    obsList = np.zeros(nCls)
+    
+    # no noise or noise?
+    # disable this, since python doesn't know how to compare an np.array to None
+    """
+    if noiseCls == None:
+        print 'no noise'
+        myCls = crossCls
+    else:
+    """
+    myCls = crossCls + noiseCls
+        
+    # fill out covar matrix
+    for map1 in range(nMaps):
+        print 'starting covariance set ',map1+1,' of ',nMaps,'... '
+        for map2 in range(map1, nMaps):
+            covIndex1 = map1*nMaps+map2-map1*(map1+1)/2     # shortens the array
+            obsList[covIndex1] = map1*nMaps+map2            # base nMaps representation
+            for map3 in range(nMaps):
+              for map4 in range(map3, nMaps):
+                covIndex2 = map3*nMaps+map4-map3*(map3+1)/2 # shortens the array
+                if covIndex1 <= covIndex2:
+                  covar[covIndex1,covIndex2] = ( \
+                    myCls[map1,map3]*myCls[map2,map4] + \
+                    myCls[map1,map4]*myCls[map2,map3] )/ \
+                    (2.*ells+1)
+                else:   # avoid double calculation
+                  covar[covIndex1,covIndex2] = covar[covIndex2,covIndex1]
+    
+    invCov = np.transpose(np.linalg.inv(np.transpose(covar)))
+
+    return covar,invCov,ells,obsList
 
 
   def makeFisher(self,lmin,lmax,TE=False,verbose=False):
@@ -1203,110 +1217,6 @@ def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,**cos_kwargs
     
   return eigs, fidAs, fidBs, sigmaAs, sigmaBs
 
-
-def plotNoisePower():
-    """
-    Purpose: plot noise powers to verify code accuracy
-        Data from table 1 and comparison is against figure 1 from
-          Ma, 2017; arxiv:1707.03348
-
-    """
-    # select some ell values to use; don't need them all!
-    myElls = np.floor(np.logspace(0,4,100))
-
-    def atr(arcmin):
-        # converts arcmin to radians
-        return arcmin*np.pi/10800
-
-    # get noise powers
-    print 'calculating temperature noise powers...'
-    # Planck
-    fwhm = 5; ST = 47
-    noisePlanck = noisePower(ST,ST,fwhm,myElls)
-    # CMBS4 v1
-    fwhm = 3; ST = 3
-    noiseCMBS41 = noisePower(ST,ST,fwhm,myElls)
-    # CMBS4 v2
-    fwhm = 1; ST = 3
-    noiseCMBS42 = noisePower(ST,ST,fwhm,myElls)
-    # CMBS4 v3
-    fwhm = 3; ST = 1
-    noiseCMBS43 = noisePower(ST,ST,fwhm,myElls)
-    # CMBS4 v4
-    fwhm = 1; ST = 1
-    noiseCMBS44 = noisePower(ST,ST,fwhm,myElls)
-
-    # get CMB T spectrum
-    print 'skipping CMB T for now.'
-
-    # plot them
-    ellConv = myElls*(myElls+1)/(2*np.pi)
-    plt.loglog(myElls,noisePlanck*ellConv,label='Planck')
-    plt.loglog(myElls,noiseCMBS41*ellConv,label='CMB-S4 v1')
-    plt.loglog(myElls,noiseCMBS42*ellConv,label='CMB-S4 v2')
-    plt.loglog(myElls,noiseCMBS43*ellConv,label='CMB-S4 v3')
-    plt.loglog(myElls,noiseCMBS44*ellConv,label='CMB-S4 v4')
-
-
-    plt.ylim((1e-8,3e4))
-    plt.xlim((2,1e4))
-    plt.xlabel(r'$\ell$')
-    plt.ylabel(r'$\ell(\ell+1)N_{\ell} / 2\pi [\mu K^2]$')
-    plt.title('Temperature noise model for Planck and CMB-S4 versions')
-    plt.legend()
-    print 'plotting'
-    plt.show()
-    print 'done'
-
-
-def plotNoisePowerMulti():
-    """
-    Purpose: plot noise powers to verify code accuracy
-    Uses: noisePowerMultiChannel
-
-    """
-    # some testing data for the most sensitive / smallest beam Planck detectors
-    # Similar to Planck Bluebook values, but actually from CosmicFish
-    # 100 GHz channel
-    ST100 = 2.5
-    PT100 = 4.0
-    FWHM100 = 10.0
-    # 143 GHz channel
-    ST143 = 2.2
-    PT143 = 4.2
-    FWHM143 = 7.1
-    # 217 GHz channel
-    ST217 = 4.8
-    PT217 = 9.8
-    FWHM217 = 5.0
-
-    # form into vectors that noisePowerMultiChannel wants
-    ST_vec = [ST100,ST143,ST217]
-    PT_vec = [PT100,PT143,PT217]
-    FWHM_vec = [FWHM100,FWHM143,FWHM217]
-
-    # select some ell values to use; don't need them all!
-    myElls = np.floor(np.logspace(0,4,100))
-
-    #TT
-    NlTT = noisePowerMultiChannel(FWHM_vec,FWHM_vec,ST_vec,ST_vec,myElls)
-    #TP
-    NlTP = noisePowerMultiChannel(FWHM_vec,FWHM_vec,ST_vec,PT_vec,myElls)
-    #PP
-    NlPP = noisePowerMultiChannel(FWHM_vec,FWHM_vec,PT_vec,PT_vec,myElls)
-
-    # plot them
-    plt.loglog(myElls,NlTT,label=r'$N_\ell^{TT}$')
-    plt.loglog(myElls,NlTP,label=r'$N_\ell^{TP}$')
-    plt.loglog(myElls,NlPP,label=r'$N_\ell^{PP}$')
-
-    plt.ylim((1e-8,3e4))
-    plt.xlim((2,1e4))
-    plt.xlabel(r'$\ell$')
-    plt.ylabel(r'$\ell(\ell+1)N_{\ell} / 2\pi [\mu K^2]$')
-    plt.title('Temperature noise model for Planck multi-channel T,P')
-    plt.legend()
-    plt.show()
 
 
 ################################################################################

@@ -61,6 +61,8 @@
     Pulled hunits parameter up to makePkinterp and MatterPower init;
       Added modelDNDZ3, from Schaan ea 2016, which has 3 params; 
       Added beesBins to tophat; ZK, 2018.02.22
+    Added cosmomc_theta field to MatterPower class; ZK, 2018.02.26
+    Minor fix to tophat; ZK, 2018.03.05
 
 """
 
@@ -319,6 +321,7 @@ class MatterPower:
     for zIndex, z in enumerate(self.zs):
       self.Hs[zIndex] = results.h_of_z(z)
     self.Hstar = results.h_of_z(self.zstar)
+    self.cosmomc_theta = results.cosmomc_theta()
 
 
   def getPKinterp(self):
@@ -496,7 +499,8 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=4.0,nZvals=100,dndzMode=2,
     # do nZvals*nBins+1 to get bin ends in set
     zs = np.linspace(zmin,zmax,nZvals*nBins+1)
     #zs = np.linspace(zmin,zmax,nZvals)
-    myDNDZ = modelDNDZ(zs,z0)
+    #myDNDZ = modelDNDZ(zs,z0)
+    myDNDZ = modelDNDZ3(zs,z0)
     myDNDZ = tophat(myDNDZ,zs,zmin,zmax,nBins,binNum)
 
     #binEdges =np.linspace(zmin,zmax,nBins+1)
@@ -591,7 +595,7 @@ def modelDNDZ3(z,z0=0.5,alpha=1.27,beta=1.02):
   return z**alpha * np.exp(-1* zRatio**beta)
 
 
-def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
+def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):#False):
   """
   Purpose:
     multiply function by tophat to get a slice of the function
@@ -615,7 +619,7 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
     Tophat slice of FofZ function
 
   """
-  myFofZ = FofZ
+  myFofZ = FofZ.copy()
   if beesBins:
     if nBins == 6:
       binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
@@ -657,6 +661,7 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
       Left bin edges are used for bin height when normalizing
     Inputs:
       FofZ: a function of redshift, z, to be normalized
+        Note: this can only be a function of one variable: z
       binZmin, binZmax: redshift min, max for normalization range
       zs: the points that redshift should eventually be evaluated at
       normPoints: number of points between each point in zs to be used in calculation
@@ -1719,7 +1724,8 @@ def plotCl(ls,Cl):
 
 def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
            dndzMode=1,binNum1=0,binNum2=0,zmax=4,nBins=10,z0=0.3,
-           doNorm=True,useWk=False,binSmooth=0,biasByBin=False):
+           doNorm=True,useWk=False,binSmooth=0,biasByBin=False,
+           doLogLog=True):
   """
   Purpose:
     to plot each C_l for kappa, galaxy combinations
@@ -1739,6 +1745,8 @@ def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
       if dndzMode is 2: binNum in {1,2,...,nBins-1,nBins}
       Default: 0 for sum of all bins
     doNorm:
+    doLogLog:
+      set to True to plot loglog
     Parameters only used in dndzMode =2:
       zmax: highest redshift to include in bins
       nBins: number of bins to divide 0<z<zmax into
@@ -1759,11 +1767,16 @@ def plotKG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
   ls4, Cl4 = getCl(myPk,myWin,binNum1=binNum1,binNum2=binNum2,
                    cor1=Window.galaxies,cor2=Window.galaxies,lmin=lmin,lmax=lmax)
 
-
-  p1=plt.semilogy(ls1,Cl1,label='$\kappa\kappa$')
-  p2=plt.semilogy(ls2,Cl2,label='$\kappa g$')
-  p3=plt.semilogy(ls3,Cl3,label='$g \kappa$')
-  p4=plt.semilogy(ls4,Cl4,label='$gg$')
+  if doLogLog:
+    p1=plt.loglog(ls1,Cl1,label='$\kappa\kappa$')
+    p2=plt.loglog(ls2,Cl2,label='$\kappa g$')
+    p3=plt.loglog(ls3,Cl3,label='$g \kappa$')
+    p4=plt.loglog(ls4,Cl4,label='$gg$')
+  else:
+    p1=plt.semilogy(ls1,Cl1,label='$\kappa\kappa$')
+    p2=plt.semilogy(ls2,Cl2,label='$\kappa g$')
+    p3=plt.semilogy(ls3,Cl3,label='$g \kappa$')
+    p4=plt.semilogy(ls4,Cl4,label='$gg$')
   plt.xlim(0,lmax)
   plt.xlabel(r'$\ell$')
   plt.ylabel(r'$C_{\ell}$')
