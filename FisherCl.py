@@ -66,6 +66,10 @@
     Added noise to kappa, galxies, and primary CMB; control via useNoise param; 
       Consolidated makeCovar codes to a function; 
       Raised lminP, lmaxP to init parameters; ZK, 2018.03.10
+    Hard coded lmax values into FisherMatrix.makeFisher method; 
+      ZK, 2018.03.26
+    Set TE noise to zero, instead of having similar form to TT,EE noise;
+      ZK, 2018.04.10
      
 
 """
@@ -115,7 +119,10 @@ class FisherMatrix:
           Important usage is as the number of points to use in approximation of
             C_l integrals
         lmin,lmax: minimum,maximum ell value to use in k,g summations
+          note: lmax used in creating Fij is now hard-coded to 
+            2000 for kk,kg,gg; 3000 for TT,TE; 5000 for EE
         lminP,lmaxP: minimum,maximum ell value to use in T,E summations
+          note: see above note.
         zmin,zmax: minimum,maximum z to use in binning for A_i, b_i parameters
         doNorm: set to True to normalize dN/dz.
           Default: True
@@ -581,7 +588,7 @@ class FisherMatrix:
             # CMBS4 v1
             fwhm = 1; ST = 1; SP = ST*1.414
             noiseCMBS4_TT1 = ncl.noisePower(ST,ST,fwhm,self.ellsP)
-            noiseCMBS4_TP1 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
+            #noiseCMBS4_TP1 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
             noiseCMBS4_PP1 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
 
             # CMBS4 v2
@@ -589,6 +596,10 @@ class FisherMatrix:
             #noiseCMBS4_TT2 = ncl.noisePower(ST,ST,fwhm,self.ellsP)
             #noiseCMBS4_TP2 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
             #noiseCMBS4_PP2 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
+
+            # assume zero TE noise
+            noiseCMBS4_TP1 = np.zeros(self.ellsP.__len__())
+            #noiseCMBS4_TP2 = np.zeros(self.ellsP.__len__())
 
             # shape like crossCls
             noiseCls1 = np.array([[noiseCMBS4_TT1,noiseCMBS4_TP1],[noiseCMBS4_TP1,noiseCMBS4_PP1]])
@@ -685,9 +696,9 @@ class FisherMatrix:
 
 ################################################################################
     #Build Fisher matrix
-    self.Fij = self.makeFisher(self.lmin,self.lmax)
+    self.Fij = self.makeFisher(self.lmin)
     if usePrimaryCMB:
-        self.FijTE = self.makeFisher(self.lminP,self.lmaxP,TE=True)
+        self.FijTE = self.makeFisher(self.lminP,TE=True)
     print 'creation of Fisher Matrix complete!\n'
     # end of init function
 
@@ -749,7 +760,8 @@ class FisherMatrix:
     return covar,invCov,ells,obsList
 
 
-  def makeFisher(self,lmin,lmax,TE=False,verbose=False):
+  #def makeFisher(self,lmin,lmax,TE=False,verbose=False):
+  def makeFisher(self,lmin,TE=False,verbose=False):
     """
       Purpose:
         multply vectorT,invcov,vector and add up
@@ -757,8 +769,9 @@ class FisherMatrix:
         self: a FisherMatrix object
         lmin: the lowest ell to include in the sum
           must be GE self.lmin
-        lmax: the highest ell to inlude in the sum
-          must be LE self.lmax
+        #Note: this version no longer has an lmax parameter.
+        #lmax: the highest ell to inlude in the sum
+        #  must be LE self.lmax
         TE: set to True to compute Fij for T,E instead of k,g
           Default: False
         verbose: set to True to have extra output
@@ -767,6 +780,7 @@ class FisherMatrix:
         a Fisher Matrix, dimensions self.nParams x self.nParams
     """
     if TE:
+      lmax = 5000 # lmax for E, not T
       if lmin < self.lminP or lmax > self.lmaxP:
         print 'makeFisher: bad lminP or lmaxP!'
         return 0
@@ -774,9 +788,10 @@ class FisherMatrix:
       selfLmax = self.lmaxP
       nParams = self.nCosParams
       invCov = self.invCovP
-      dClVecs = self.dClVecsP
+      dClVecs = self.dClVecsP.copy()
 
     else:
+      lmax = 2000 # lmax for k,g
       if lmin < self.lmin or lmax > self.lmax:
         print 'makeFisher: bad lmin or lmax!'
         return 0
@@ -784,7 +799,7 @@ class FisherMatrix:
       selfLmax = self.lmax
       nParams = self.nParams
       invCov = self.invCov
-      dClVecs = self.dClVecs
+      dClVecs = self.dClVecs.copy()
     
     if verbose:
       print 'building Fisher matrix from components...'
@@ -797,14 +812,33 @@ class FisherMatrix:
       dClVec_i = dClVecs[:,i,:] # shape (nCls,nElls)
       for j in range(nParams):
         dClVec_j = dClVecs[:,j,:] # shape (nCls,nElls)
+
+        # adjust lmax for TT case (not TE,EE)
+        if TE: 
+          print 'adjusting lmax for TT... '
+          lmaxTT = 3000
+          dClVec_i[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
+          dClVec_j[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
+        
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):
-          
           ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
-          
           myCov = invCov[:,:,ellInd]
           fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
+
+        # now the TT part above ell=3000
+        #if TE:
+        #  print 'removing TT part above ell=3000...'
+        #  lmin = 3001
+        #  lmax = 5000
+        #  for ell in range(lmax-lmin+1):
+        #    ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
+        #    fij = dClVec_i[0,ellInd]*invCov[0,0,ellInd]*dClVec_j[0,ellInd]
+        #    #fij = dClVec_i[1,ellInd]*invCov[1,1,ellInd]*dClVec_j[1,ellInd]
+        #    Fij[i,j] -= fij
+
+
     return Fij
 
     

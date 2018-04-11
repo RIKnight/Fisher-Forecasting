@@ -63,6 +63,12 @@
       Added beesBins to tophat; ZK, 2018.02.22
     Added cosmomc_theta field to MatterPower class; ZK, 2018.02.26
     Minor fix to tophat; ZK, 2018.03.05
+    Expanded dark energy parameterization to include w0,wa.
+      This necessitates the use of a modified version of the equations_ppf.f90 
+      module in CAMB and additions to pycamb's model.CAMBparams.set_dark_energy;
+      ZK, 2018.03.19
+    Switched ordering of pars initialization in MatterPower.getPars to first
+      set_dark_energy, then set_cosmology; ZK, 2018.03.13
 
 """
 
@@ -71,7 +77,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 #import scipy.integrate as sint
 from scipy.interpolate import interp1d
-import camb
+import camb # Note: this is now a modified version that includes w,wa 
 from camb import model, initialpower
 from scipy import polyfit,poly1d
 
@@ -126,7 +132,7 @@ class MatterPower:
 
   """
 
-  def __init__(self,nz=10000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,
+  def __init__(self,nz=10000,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1.0,wa=0.0,
                nonlinear=True,AccuracyBoost=3,myVar1=model.Transfer_tot,
                myVar2=model.Transfer_tot,hunits=False,**cos_kwargs):
     """
@@ -139,8 +145,10 @@ class MatterPower:
         ns: "scalar spectral index"
         r: "tensor to scalar ratio at pivot"
         kPivot: "pivot scale for power spectrum"
-        w: the dark energy eos parameter
-          default: -1
+        w: the  w0 part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+          Default: -1.0
+        wa: the wa part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+          Default: 0.0
         nonlinear: set to True to use CAMB's non-linear correction from halo model
         AccuracyBoost: to pass to set_accuracy to set accuracy
           Note that this sets accuracy globally, not just for this object
@@ -174,6 +182,7 @@ class MatterPower:
     self.nonlinear=nonlinear
     self.AccuracyBoost = AccuracyBoost
     self.w = w
+    self.wa = wa
 
     # check this
     print 'neutrino_hierarchy = ',self.cosParams['neutrino_hierarchy']
@@ -184,7 +193,7 @@ class MatterPower:
     k_per_logint = None #100 # I really don't know what this will do
 
     # make the PK interpolator (via camb)
-    self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,w=w,
+    self.makePKinterp(newPk=True,nz=nz,kmax=self.kmax,As=As,ns=ns,r=r,w=w,wa=wa,
                       kPivot=kPivot,k_per_logint=k_per_logint,nonlinear=nonlinear,
                       AccuracyBoost=AccuracyBoost,myVar1=myVar1,myVar2=myVar2,
                       hunits=hunits)
@@ -200,8 +209,8 @@ class MatterPower:
     self.cosParams.update(cos_kwargs)
 
 
-  def getPars(self,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1,AccuracyBoost=3,
-              **cos_kwargs):
+  def getPars(self,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1.0,wa=0.0,
+              AccuracyBoost=3,**cos_kwargs):
     """
       Purpose:
         quickly get camb parameters object
@@ -216,8 +225,10 @@ class MatterPower:
           ns: "scalar spectral index"
           r: "tensor to scalar ratio at pivot"
           kPivot: "pivot scale for power spectrum"
-          w: the dark energy eos parameter
-            Default: -1
+          w: the  w0 part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+              Default: -1.0
+          wa: the wa part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+              Default: 0.0
           AccuracyBoost: to pass to set_accuracy to set accuracy
             Note that this sets accuracy globally, not just for this object
         **cos_kwargs: keyword args to pass to set_cosmology 
@@ -231,8 +242,11 @@ class MatterPower:
 
     #Set up a new set of parameters for CAMB
     pars = camb.CAMBparams()
+
+    pars.set_dark_energy(w,wa)
     pars.set_cosmology(**cosParams)
-    pars.set_dark_energy(w)
+    #pars.set_dark_energy(w,wa)
+    
     #pars.set_matter_power() # get_matter_power_interpolater does this
     pars.InitPower.set_params(As=As,ns=ns,r=r,pivot_scalar=kPivot)
 
@@ -242,7 +256,7 @@ class MatterPower:
 
 
   def makePKinterp(self,newPk=True,nz=10000,kmax=10,As=2.130e-9,ns=0.9653,r=0,
-                   kPivot=0.05,w=-1,myVar1=model.Transfer_tot,
+                   kPivot=0.05,w=-1.0,wa=0.0,myVar1=model.Transfer_tot,
                    myVar2=model.Transfer_tot,k_per_logint=None,
                    nonlinear=True,AccuracyBoost=3,hunits=False,**cos_kwargs):
     """
@@ -264,8 +278,10 @@ class MatterPower:
         ns: "scalar spectral index"
         r: "tensor to scalar ratio at pivot"
         kPivot: "pivot scale for power spectrum"
-        w: the dark energy eos parameter
-          Default: -1
+        w: the  w0 part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+            Default: -1.0
+        wa: the wa part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+            Default: 0.0
         myVar1,myVar2: the variables to get power spectrum of
           Default: model.Transfer_tot for delta_tot
         k_per_logint=None: to pass to get_matter_power_interpolater 
@@ -284,7 +300,7 @@ class MatterPower:
     """
     if newPk:
       self.updateParams(**cos_kwargs)
-      self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot,w=w,
+      self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot,w=w,wa=wa,
                                AccuracyBoost=AccuracyBoost)
 
     #For Limber result, want integration over \chi (comoving radial distance), from 0 to chi_*.
@@ -595,7 +611,8 @@ def modelDNDZ3(z,z0=0.5,alpha=1.27,beta=1.02):
   return z**alpha * np.exp(-1* zRatio**beta)
 
 
-def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):#False):
+#def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
+def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
   """
   Purpose:
     multiply function by tophat to get a slice of the function
