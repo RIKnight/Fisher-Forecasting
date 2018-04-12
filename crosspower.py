@@ -69,6 +69,8 @@
       ZK, 2018.03.19
     Switched ordering of pars initialization in MatterPower.getPars to first
       set_dark_energy, then set_cosmology; ZK, 2018.03.13
+    Modified getCl to calculate Cl at smaller set of ell values and 
+      interpolate the rest; ZK, 2018.04.10
 
 """
 
@@ -80,6 +82,7 @@ from scipy.interpolate import interp1d
 import camb # Note: this is now a modified version that includes w,wa 
 from camb import model, initialpower
 from scipy import polyfit,poly1d
+from scipy.interpolate import UnivariateSpline
 
 
 ################################################################################
@@ -1528,7 +1531,7 @@ class Window:
 
 # need to change all getCl calls: use Window object instead of old param list
 def getCl(myPk,myWin,binNum1=0,binNum2=0,cor1=Window.kappa,cor2=Window.kappa,
-          lmin=2,lmax=2500):
+          lmin=2,lmax=2500,useInterp=True):
   """
     Purpose: get angular power spectrum
     Inputs:
@@ -1545,6 +1548,9 @@ def getCl(myPk,myWin,binNum1=0,binNum2=0,cor1=Window.kappa,cor2=Window.kappa,
         must be Window.kappa or Window.galaxies
         Default: Window.kappa
       lmin,lmax: lowest,highest ell to return.
+      useInterp: set to true to only do some ell values, and interpolate
+        the rest
+        Default: True
     Returns: 
       ell,  the ell values (same length as Cl array)
       Cl, the power spectrum array
@@ -1580,15 +1586,39 @@ def getCl(myPk,myWin,binNum1=0,binNum2=0,cor1=Window.kappa,cor2=Window.kappa,
   win2 = winFunc2(zs)
 
   #Do integral over chi
-  ls = np.arange(lmin,lmax+1, dtype=np.float64)
-  cl = np.zeros(ls.shape)
-  w = np.ones(chis.shape) #this is just used to set to zero k values out of range of interpolation
-  for i, l in enumerate(ls):
-      k=(l+0.5)/chis
-      w[:]=1
-      w[k<1e-4]=0
-      w[k>=myPk.kmax]=0
-      cl[i] = np.dot(dchis, w*PK.P(zs, k, grid=False)*win1*win2/(chis**2))
+  if useInterp and lmax <= 3000:
+    # define ell values to be used 
+    #   (same used in notebook "getCl interpolation testing")
+    ells1 = np.arange(10)*2+10
+    ells2 = np.arange(4)*5+30
+    ells3 = np.arange(5)*10+50
+    ells4 = np.arange(20)*25+100
+    ells5 = np.arange(20)*70+600
+    ells6 = np.arange(11)*100+2000 # switch 11 to 31 to extend from 3000 to 5000
+    ellsSet = np.append(ells1,np.append(ells2,np.append(ells3,
+        np.append(ells4,np.append(ells5,ells6)))))
+    #print 'ell set: ',ellsSet
+  else:
+    if lmax > 3000:
+        print 'warning! lmax>3000 found; Cl interpolation not being done.'
+    ellsSet = np.arange(lmin,lmax+1, dtype=np.float64)
+
+  Cells = np.zeros(ellsSet.shape)
+  w = np.ones(chis.shape) #this is just used to set to zero k values out of range
+  for i, l in enumerate(ellsSet):
+    k=(l+0.5)/chis
+    w[:]=1
+    w[k<1e-4]=0
+    w[k>=myPk.kmax]=0
+    Cells[i] = np.dot(dchis, w*PK.P(zs, k, grid=False)*win1*win2/(chis**2))
+
+  if useInterp:
+    ls = np.arange(lmin,lmax+1, dtype=np.float64)
+    y_spl = UnivariateSpline(ellsSet,Cells,s=0,k=4)
+    cl = y_spl(ls)   
+  else:
+    ls = ellsSet
+    cl = Cells
 
   return ls, cl
 
@@ -1922,7 +1952,7 @@ def plotWinKbins(myPk,zmin=0.0,zmax=4.0,nBins=10,doNorm=False,normPoints=100,
     zmin,zmax: min,max z for dividing up bins
     nBins: number of bins to divide up
     doNorm=False: set to True to normalize bins
-    normPoints: number of points per zs interval to use when normalizing
+    normPoints: number of points per zs interv///getal to use when normalizing
     binSmooth: controls smoothing of tophat-stamped bins (unless dndzMode == 1)
       Default: 0
     BPZ: set to True to use BPZ curves for dNdz, False for TPZ
