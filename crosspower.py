@@ -71,6 +71,8 @@
       set_dark_energy, then set_cosmology; ZK, 2018.03.13
     Modified getCl to calculate Cl at smaller set of ell values and 
       interpolate the rest; ZK, 2018.04.10
+    Added lensLmax and lpa parameters to MatterPower.getPars to control
+      lensing accuracy and range; ZK, 2018.04.13
 
 """
 
@@ -213,7 +215,7 @@ class MatterPower:
 
 
   def getPars(self,As=2.130e-9,ns=0.9653,r=0,kPivot=0.05,w=-1.0,wa=0.0,
-              AccuracyBoost=3,**cos_kwargs):
+              lmax=3000,lpa=5.0,AccuracyBoost=3,**cos_kwargs):
     """
       Purpose:
         quickly get camb parameters object
@@ -229,11 +231,17 @@ class MatterPower:
           r: "tensor to scalar ratio at pivot"
           kPivot: "pivot scale for power spectrum"
           w: the  w0 part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+              Warning: this is a global setting, not just per object
               Default: -1.0
           wa: the wa part of the dark energy p_de/rho_de in w = w0 + wa*( 1-a )
+              Warning: this is a global setting, not just per object
               Default: 0.0
+          lmax: lmax setting for T,E,B to pass to set_for_lmax
+              Default: 3000
+          lpa: lens_potential_accuracy setting to pass to set_for_lmax
+              Default: 5.0
           AccuracyBoost: to pass to set_accuracy to set accuracy
-            Note that this sets accuracy globally, not just for this object
+              Warning: this is a global setting, not just per object
         **cos_kwargs: keyword args to pass to set_cosmology 
           if not included, object defaults will be used
       Returns:
@@ -245,14 +253,10 @@ class MatterPower:
 
     #Set up a new set of parameters for CAMB
     pars = camb.CAMBparams()
-
     pars.set_dark_energy(w,wa)
     pars.set_cosmology(**cosParams)
-    #pars.set_dark_energy(w,wa)
-    
-    #pars.set_matter_power() # get_matter_power_interpolater does this
     pars.InitPower.set_params(As=As,ns=ns,r=r,pivot_scalar=kPivot)
-
+    pars.set_for_lmax(lmax, lens_potential_accuracy=lpa)
     pars.set_accuracy(AccuracyBoost=AccuracyBoost)
 
     return pars
