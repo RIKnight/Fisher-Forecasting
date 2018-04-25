@@ -73,6 +73,11 @@
     Added Cl^BB and BB noise to primary CMB Fisher Matrix calculation;
       Fixed major dark energy parameterization error: Re-organized code to 
       accomodate the use of global variables; added wa param; ZK, 2018.04.15
+    Fixed an error in the deflection to kappa conversion in reconstruction 
+      noise; ZK, 2018.04.19
+    Fixed bin looping error in new getCrossCls functions; other minor fixes
+      to hastily updated code; ZK, 2018.04.20
+    Fixed the shape of the noiseClsP array; ZK, 2018.04.23
      
 
 """
@@ -175,7 +180,7 @@ class FisherMatrix:
         'r'     : 0,
         'kPivot': 0.05,
 
-        'w0'    : -1.0, # DARK ENERGY!!!
+        'w'     : -1.0, # actually is w0 but CAMB calls it w
         'wa'    : 0.0,
 
         # if fiducial mnu is changed, need to adjust omch2 as well
@@ -233,21 +238,30 @@ class FisherMatrix:
       for map2 in range(map1, nMaps):
         self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
     if usePrimaryCMB:
-        # select 2 for T,E, 3 for T,E,B
+        #nMapsP = 2 # T,E
         nMapsP = 3 # T,E,B
         nClsP = nMapsP*(nMapsP+1)/2
-        self.fieldNamesP = ['T','E','B']
-        self.obsNamesP = ['TT','TE','EE','BB'] # is this enough?    
+        if nMapsP == 2:
+            self.fieldNamesP = ['T','E']
+            self.obsNamesP = ['TT','TE','EE']
+        elif nMapsP == 3:
+            self.fieldNamesP = ['T','E','B']
+            self.obsNamesP = ['TT','TE','EE','BB'] # TB etc?
+        else:
+            print 'uh oh, you didn\'t do that right.'
     
     # parameters list:
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
     nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
-    paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
-    deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    #paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
+    #deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    # modified to use H0 instead of cosmomc_theta
+    paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa']
+    deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
-    self.nParams   = nParams
+    self.nParams   = nCosParams+nBins
     self.nCosParams = nCosParams
     self.paramList = paramList
 
@@ -323,16 +337,19 @@ class FisherMatrix:
 
     # get main set of power spectra    
     self.crossCls = self.getCrossCls(['(All Fiducial)'],[myParams],myPk,
-                                     lmin,lmax,nMaps,tophatBins=tophatBins)
+                                     lmin,lmax,nBins,tophatBins=tophatBins)
     # get the perturbed versions
     print 'starting upper spectra for numeric derivatives . . . '
-    self.crossClsPlus = self.getCrossCls(paramList,myParamsUpper,myPk,
-                                         lmin,lmax,nMaps,tophatBins=tophatBins)    
+    self.crossClsPlus = self.getCrossCls(paramList[:nCosParams],myParamsUpper,
+                                         myPk,
+                                         lmin,lmax,nBins,tophatBins=tophatBins)    
     print 'starting lower spectra for numeric derivatives . . . '
-    self.crossClsMinus = self.getCrossCls(paramList,myParamsLower,myPk,
-                                          lmin,lmax,nMaps,tophatBins=tophatBins)
+    self.crossClsMinus = self.getCrossCls(paramList[:nCosParams],myParamsLower,
+                                          myPk,
+                                          lmin,lmax,nBins,tophatBins=tophatBins)
     
     # reset global (dark energy and AccuracyBoost) settings
+    lpa = 5.0 # set_for_lmax also sets lensing 
     pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
 
     self.ells = np.arange(lmin,lmax+1)
@@ -376,12 +393,12 @@ class FisherMatrix:
     # do the primary CMB component
     if usePrimaryCMB:
         print 'starting primary CMB cross-power . . . '
-        lpa = 5.0 # set_for_lmax also sets lensing 
-        pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
+        #lpa = 5.0 # set_for_lmax also sets lensing 
+        #pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
         
         #get the total lensed CMB power spectra versus unlensed
-        #myClName = 'total'
-        myClName = 'unlensed_scalar'
+        myClName = 'total'
+        #myClName = 'unlensed_scalar'
         
         #self.crossClsP      = np.zeros((nMapsP,nMapsP,           lmaxP-lminP+1))
         #self.crossClsPPlus  = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
@@ -394,12 +411,14 @@ class FisherMatrix:
                                       AccuracyBoost=AccuracyBoost)
         # get the perturbed versions
         print 'starting upper spectra for numeric derivatives . . . '
-        crossClsPPlus  = self.getCrossClsP(paramList,myParamsUpper,myPk,
+        crossClsPPlus  = self.getCrossClsP(paramList[:nCosParams],myParamsUpper,
+                                           myPk,
                                            nMaps=nMapsP,lmax=lmaxP,lpa=lpa,
                                            myClName=myClName,
                                            AccuracyBoost=AccuracyBoost)
         print 'starting lower spectra for numeric derivatives . . . '
-        crossClsPMinus = self.getCrossClsP(paramList,myParamsLower,myPk,
+        crossClsPMinus = self.getCrossClsP(paramList[:nCosParams],myParamsLower,
+                                           myPk,
                                            nMaps=nMapsP,lmax=lmaxP,lpa=lpa,
                                            myClName=myClName,
                                            AccuracyBoost=AccuracyBoost)
@@ -432,7 +451,11 @@ class FisherMatrix:
         # but d is in between k and phi, so...?
         # Scratch that.
         # Assume output of quicklens is Cl^phiphi
-        Nlkk = EB_noise * (ells*(ells+1)/2)**2
+        #Nlkk = EB_noise * (ells*(ells+1)/2)**2
+
+        # no, assume it's Nl^dd
+        # this formula is a reasonable guess based on Fourier analog.
+        Nlkk = EB_noise * ells*(ells+1)/4
 
 
         print 'getting galaxy shot noise... '
@@ -441,7 +464,8 @@ class FisherMatrix:
         nbar = 66 # 66 arcmin^-2 to match Bye's value
 
         # the selection of beesBins must be consistent with that which is selected in cp.tophat
-        beesBins = True
+        #beesBins = True
+        beesBins = False
         if beesBins:
             binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
             nBins = 6
@@ -478,18 +502,29 @@ class FisherMatrix:
             noiseCMBS4_PP1 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
 
             # assume zero TE noise
-            zerosList = np.zeros(lmax+1)
-            noiseCMBS4_TP1 = zerosList
+            #zerosList = np.zeros(lmax+1)
+            #noiseCMBS4_TP1 = zerosList
 
             # shape like crossCls
-            if nMaps == 2:
-                noiseClsP = np.array([[noiseCMBS4_TT1,noiseCMBS4_TP1],[noiseCMBS4_TP1,noiseCMBS4_PP1]])
-            elif nMaps == 3:
-                noiseClsP = np.array([[noiseCMBS4_TT1, noiseCMBS4_TP1,      zerosList],
-                                      [noiseCMBS4_TP1, noiseCMBS4_PP1,      zerosList],
-                                      [     zerosList,      zerosList, noiseCMBS4_PP1]])
-            else:
-                'bad nMaps for noise maker'
+            self.noiseClsP = np.zeros(self.crossClsP.shape)
+            self.noiseClsP[0,0] = noiseCMBS4_TT1
+            #self.noiseClsP[0,1] = noiseCMBS4_TP1
+            #self.noiseClsP[1,0] = noiseCMBS4_TP1
+            self.noiseClsP[1,1] = noiseCMBS4_PP1
+
+            if nMapsP == 3: # get the BB part
+                self.noiseClsP[2,2] = noiseCMBS4_PP1
+            
+            
+            
+            #if nMapsP == 2:
+            #    self.noiseClsP = np.array([[noiseCMBS4_TT1,noiseCMBS4_TP1],[noiseCMBS4_TP1,noiseCMBS4_PP1]])
+            #elif nMapsP == 3:
+            #    self.noiseClsP = np.array([[noiseCMBS4_TT1, noiseCMBS4_TP1,      zerosList],
+            #                               [noiseCMBS4_TP1, noiseCMBS4_PP1,      zerosList],
+            #                               [     zerosList,      zerosList, noiseCMBS4_PP1]])
+            #else:
+            #    print 'bad nMaps for noise maker'
 
     
     else: # no noise
@@ -509,7 +544,7 @@ class FisherMatrix:
         self.makeCovar(self.crossCls,self.noiseCls,self.lmin,self.lmax)
     if usePrimaryCMB:
         self.covarP,self.invCovP,self.ellsP,self.obsListP = \
-            self.makeCovar(self.crossClsP,self.noiseClsP,0,self.lmaxP)
+            self.makeCovar(self.crossClsP,self.noiseClsP,self.lminP,self.lmaxP)
     
 
 
@@ -520,7 +555,8 @@ class FisherMatrix:
     # get dC_l^munu/da_i (one vector of derivatives of C_ls for each param a_i)
     # store as matrix with additional dimension for a_i)
     # uses same (shortened) nCls as self.covar and self.obsList
-    self.dClVecs = np.empty((nCls, nParams, lmax-lmin+1))
+    nCls = nMaps*(nMaps+1)/2
+    self.dClVecs = np.empty((nCls, self.nParams, lmax-lmin+1))
     Clzeros = np.zeros(lmax-lmin+1) # for putting into dClVecs when needed
     for map1 in range(nMaps):
       print 'starting derivative set ',map1+1,' of ',nMaps,'... '
@@ -564,7 +600,8 @@ class FisherMatrix:
     # note: most of this is copied from above.  
     #   Later I should consolidate the two versions into a function.
     if usePrimaryCMB:
-        dClVecsP = np.empty((nClsP, nCosParams, lmaxP-lminP+1))
+        nClsP = nMapsP*(nMapsP+1)/2
+        dClVecsP = np.empty((nClsP, self.nCosParams, lmaxP-lminP+1))
 
         for map1 in range(nMapsP):
             print 'starting primary CMB derivative set ',map1+1,' of ',nMapsP,'... '
@@ -590,19 +627,20 @@ class FisherMatrix:
 ################################################################################
 # other methods
 
-  def getCrossCls(self,paramList,myParams,myPk,lmin,lmax,nMaps,tophatBins=True):
+  def getCrossCls(self,paramList,myParams,myPk,lmin,lmax,nBins,tophatBins=True):
     """
         Purpose:
             get the crossCls for kappa, galaxies
         Inputs:
-            paramList: like FisherMatrix.paramList
+            paramList: like FisherMatrix.paramList, but only contains parameter
+                names for those which are to be varied
                 Note: a list of length 1 will cause a differently shaped array 
                 to be returned
             myParams: a list of lists of parameters like FisherMatrix.cosParams
                 This list must have the same length as paramList
             myPk: a MatterPower object
 
-            nMaps: number of fields being used (should be 1+nBins)
+            nBins: number of redshift bins being used (should be nMaps-1)
             lmin,lmax: min,max ell value to use
             tophatBins: set to True to use tophat-shaped, non-overlapping bins
         Returns:
@@ -611,8 +649,9 @@ class FisherMatrix:
               (nMaps,nMaps,lmax)
     """
     nCosParams = paramList.__len__()
+    nMaps = nBins+1
     
-    crossCls = np.zeros((nMaps,nMaps,nCosParams,lmax+1))
+    crossCls = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
     for cParamNum in range(nCosParams):
         print 'calculating MatterPower and Window objects for ',\
               paramList[cParamNum], ' derivative . . . '
@@ -655,7 +694,7 @@ class FisherMatrix:
 
     # reshape for unperterbed version
     if nCosParams == 1:
-        crossCls = np.reshape(crossCls,(nMaps,nMaps,lmax+1))
+        crossCls = np.reshape(crossCls,(nMaps,nMaps,lmax-lmin+1))
     return crossCls
 
     
@@ -666,14 +705,15 @@ class FisherMatrix:
     Purpose:
         get the crossCls for primary CMB: TT,TE,EE,BB
     Inputs:
-        paramList: like FisherMatrix.paramList
+        paramList: like FisherMatrix.paramList, but only contains parameter
+            names for those which are to be varied
             Note: a list of length 1 will cause a differently shaped array 
             to be returned
         myParams: a list of lists of parameters like FisherMatrix.cosParams
             This list must have the same length as paramList
         myPk: a MatterPower object
         
-        nMaps: number of maps.  Set to 3 for T,E,B
+        nMaps: number of maps.  Set to 3 for T,E,B; 2 for T,E
         lmax: lmax for returned array.  lmin will be zero
         lpa: lensing_power_accuracy setting
         AccuracyBoost: accuracy setting
@@ -826,8 +866,8 @@ class FisherMatrix:
         if TE: 
           print 'adjusting lmax for TT... '
           lmaxTT = 3000
-          dClVec_i[0,lmaxTT+1:] = np.zeros(5000-lmaxTT)
-          dClVec_j[0,lmaxTT+1:] = np.zeros(5000-lmaxTT)
+          dClVec_i[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
+          dClVec_j[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
         
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):

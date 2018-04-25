@@ -618,8 +618,8 @@ def modelDNDZ3(z,z0=0.5,alpha=1.27,beta=1.02):
   return z**alpha * np.exp(-1* zRatio**beta)
 
 
-#def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
-def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
+#def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
+def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
   """
   Purpose:
     multiply function by tophat to get a slice of the function
