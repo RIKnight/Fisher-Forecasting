@@ -73,6 +73,8 @@
       interpolate the rest; ZK, 2018.04.10
     Added lensLmax and lpa parameters to MatterPower.getPars to control
       lensing accuracy and range; ZK, 2018.04.13
+    Added a second beesBins parameter, this one in getNormalizedDNDZbin;
+      ZK, 2018.05.05
 
 """
 
@@ -305,13 +307,17 @@ class MatterPower:
         sets various object variables
 
     """
+    print 'starting makePkInterp.'
     if newPk:
       self.updateParams(**cos_kwargs)
       self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot,w=w,wa=wa,
                                AccuracyBoost=AccuracyBoost)
+    print 'cos_kwargs: ',cos_kwargs
+    print 'pars: ',self.pars
 
     #For Limber result, want integration over \chi (comoving radial distance), from 0 to chi_*.
     #so get background results to find chistar, set up arrage in chi, and calculate corresponding redshifts
+    print 'get_background...'
     results= camb.get_background(self.pars)
     self.chistar = results.conformal_time(0)- model.tau_maxvis.value
     self.chis = np.linspace(0,self.chistar,nz)
@@ -327,6 +333,7 @@ class MatterPower:
     #Get the matter power spectrum interpolation object (based on RectBivariateSpline). 
     #return_z_k = True
     return_z_k = False
+    print 'get matter power interpolator...'
     if return_z_k:
         self.PK, self.zArray, self.kArray = \
             camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
@@ -336,7 +343,8 @@ class MatterPower:
         self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
             hubble_units=hunits, k_hunit=hunits, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar)
-
+    print 'got it.'
+        
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'
     self.Hs = np.empty(nz-2)
@@ -345,7 +353,7 @@ class MatterPower:
       self.Hs[zIndex] = results.h_of_z(z)
     self.Hstar = results.h_of_z(self.zstar)
     self.cosmomc_theta = results.cosmomc_theta()
-
+    print 'finishing makePkInterp.'
 
   def getPKinterp(self):
     """
@@ -618,8 +626,8 @@ def modelDNDZ3(z,z0=0.5,alpha=1.27,beta=1.02):
   return z**alpha * np.exp(-1* zRatio**beta)
 
 
-#def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
-def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
+#def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=False):
+def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
   """
   Purpose:
     multiply function by tophat to get a slice of the function
@@ -752,7 +760,8 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
 
 
 def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
-                      zmin=0.0,normPoints=1000,binSmooth=0,verbose=False):
+                         zmin=0.0,normPoints=1000,binSmooth=0,
+                         verbose=False,beesBins=True):
   """
     Purpose:
       return normalized dndz array
@@ -776,6 +785,8 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
       zmin=0.0: minimum redshift in range of bins
       normPoints=1000: number of points per zs interval to use when normalizing
       verbose: control ammount of output from normBin
+      beesBins: set to True to use beesBins kludge for uneven bin sizes
+        Should match what is set in function tophat
     Returns:
       Normalized array of dNdz values within the bin, corresponding to redshifts zs
       
@@ -801,7 +812,14 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
                             binSmooth=binSmooth,z0=z0,nBins=nBins)
 
     # divide redshift range into bins and select desired bin
-    binEdges = np.linspace(zmin,zmax,nBins+1)
+    if beesBins:
+        if nBins == 6:
+          binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+        else:
+          print '!!!!! wrong nBins for beesBins detected !!!!!'
+          return 0
+    else:
+        binEdges = np.linspace(zmin,zmax,nBins+1)
     binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
     binZmax = binEdges[binNum]
     if binNum == 0:
@@ -1485,8 +1503,12 @@ class Window:
               zmax+extraZ,nBins+extraBins,dndzMode=dndzMode,zmin=zmin,
               normPoints=normPoints,binSmooth=binSmooth,verbose=verbose)
         # approximation to integral:
+        print 'normalizedDNDZ: ',normalizedDNDZ
+        print 'bGofZ: ',bGofZ
+        print 'deltaZ: ',deltaZ
         self.binBGs[binNum] = np.sum(normalizedDNDZ*bGofZ)*deltaZ 
-
+        print 'binNum: ',binNum, ', binBGs: ',self.binBGs[binNum]
+        
         if biasByBin:
             biasesK = ones(zs)*self.binBKs[binNum]
             biasesG = ones(zs)*self.binBGs[binNum]

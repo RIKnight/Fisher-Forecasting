@@ -78,7 +78,8 @@
     Fixed bin looping error in new getCrossCls functions; other minor fixes
       to hastily updated code; ZK, 2018.04.20
     Fixed the shape of the noiseClsP array; ZK, 2018.04.23
-     
+    Specified primary CMB unit to be 'muK'; 
+      Created parameter set including H0, omk; ZK, 2018.04.27
 
 """
 
@@ -238,8 +239,8 @@ class FisherMatrix:
       for map2 in range(map1, nMaps):
         self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
     if usePrimaryCMB:
-        #nMapsP = 2 # T,E
-        nMapsP = 3 # T,E,B
+        nMapsP = 2 # T,E
+        #nMapsP = 3 # T,E,B
         nClsP = nMapsP*(nMapsP+1)/2
         if nMapsP == 2:
             self.fieldNamesP = ['T','E']
@@ -253,12 +254,25 @@ class FisherMatrix:
     # parameters list:
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
-    nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
+    #nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
     #paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
     #deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+
     # modified to use H0 instead of cosmomc_theta
-    paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa']
-    deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    #nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
+    #paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa']
+    #deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    
+    # modified to use H0 instead of cosmomc_theta, and include omk
+    #nCosParams = 10 # 6 LCDM + Mnu + w0 + wa + omk
+    #paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa','omk']
+    #deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025, 0.01] #mnu one in eV
+    
+    # modified for just one param: omk
+    nCosParams = 1 # omk
+    paramList = ['omk']
+    deltaP =    [ 0.01]
+    
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
     self.nParams   = nCosParams+nBins
@@ -397,8 +411,8 @@ class FisherMatrix:
         #pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
         
         #get the total lensed CMB power spectra versus unlensed
-        myClName = 'total'
-        #myClName = 'unlensed_scalar'
+        #myClName = 'total'
+        myClName = 'unlensed_scalar'
         
         #self.crossClsP      = np.zeros((nMapsP,nMapsP,           lmaxP-lminP+1))
         #self.crossClsPPlus  = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
@@ -442,21 +456,16 @@ class FisherMatrix:
         # noise levels from a possible CMB-S4 design:
         nlev_t     = 1.   # temperature noise level, in uK.arcmin.
         nlev_p     = 1.414   # polarization noise level, in uK.arcmin.
-        beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
+        #beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
+
+        beam_fwhm  = 4.   # Gaussian beam full-width-at-half-maximum. 
+        #From Hu & Okamoto's "near-perfect" experiment
 
         ells,EB_noise = ncl.getRecNoise(self.lmax,nlev_t,nlev_p,beam_fwhm)
 
         # convert Nl^dd to Nl^kk
-        # use Cl^kk = 1/4*[l*(l+1)]^2 * Cl^phiphi?
-        # but d is in between k and phi, so...?
-        # Scratch that.
-        # Assume output of quicklens is Cl^phiphi
-        #Nlkk = EB_noise * (ells*(ells+1)/2)**2
-
-        # no, assume it's Nl^dd
         # this formula is a reasonable guess based on Fourier analog.
         Nlkk = EB_noise * ells*(ells+1)/4
-
 
         print 'getting galaxy shot noise... '
         # From Schaan et. al.: LSST n_source = 26/arcmin^2 for full survey
@@ -514,17 +523,8 @@ class FisherMatrix:
 
             if nMapsP == 3: # get the BB part
                 self.noiseClsP[2,2] = noiseCMBS4_PP1
-            
-            
-            
-            #if nMapsP == 2:
-            #    self.noiseClsP = np.array([[noiseCMBS4_TT1,noiseCMBS4_TP1],[noiseCMBS4_TP1,noiseCMBS4_PP1]])
-            #elif nMapsP == 3:
-            #    self.noiseClsP = np.array([[noiseCMBS4_TT1, noiseCMBS4_TP1,      zerosList],
-            #                               [noiseCMBS4_TP1, noiseCMBS4_PP1,      zerosList],
-            #                               [     zerosList,      zerosList, noiseCMBS4_PP1]])
-            #else:
-            #    print 'bad nMaps for noise maker'
+            else:
+                print 'bad nMaps for noise maker'
 
     
     else: # no noise
@@ -724,6 +724,7 @@ class FisherMatrix:
             (nMaps,nMaps,lmax)
           Note Cl arrays are all zero based (starting at L=0).
           Note L=0,1 entries will be zero by default.
+          Units are microK^2
     """
     nCosParams = paramList.__len__()
     
@@ -737,7 +738,7 @@ class FisherMatrix:
                                       **myParams[paramNum])
         #get the selected power spectra
         results = camb.get_results(pars)
-        powers = results.get_cmb_power_spectra(pars)
+        powers = results.get_cmb_power_spectra(pars, CMB_unit='muK')
         myCl = powers[myClName]
         
         #store them
