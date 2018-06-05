@@ -75,6 +75,9 @@
       lensing accuracy and range; ZK, 2018.04.13
     Added a second beesBins parameter, this one in getNormalizedDNDZbin;
       ZK, 2018.05.05
+    Added getDNDZM function to implement Marcel's "optimistic" dndz; kludged
+      getDNDZinterp to use instead of getDNDZ in dndzMode = 1; ZK, 2018.05.16
+    Removed erroneous -1 from interpolator in normBin; ZK, 2018.06.01
 
 """
 
@@ -312,12 +315,12 @@ class MatterPower:
       self.updateParams(**cos_kwargs)
       self.pars = self.getPars(As=As,ns=ns,r=r,kPivot=kPivot,w=w,wa=wa,
                                AccuracyBoost=AccuracyBoost)
-    print 'cos_kwargs: ',cos_kwargs
-    print 'pars: ',self.pars
+    #print 'cos_kwargs: ',cos_kwargs
+    #print 'pars: ',self.pars
 
     #For Limber result, want integration over \chi (comoving radial distance), from 0 to chi_*.
     #so get background results to find chistar, set up arrage in chi, and calculate corresponding redshifts
-    print 'get_background...'
+    #print 'get_background...'
     results= camb.get_background(self.pars)
     self.chistar = results.conformal_time(0)- model.tau_maxvis.value
     self.chis = np.linspace(0,self.chistar,nz)
@@ -328,12 +331,12 @@ class MatterPower:
     self.dzs   = (  self.zs[2:]-  self.zs[:-2])/2 #not as nice as with chi since zs not evenly spaced
     self.chis = self.chis[1:-1]
     self.zs = self.zs[1:-1]
-    print 'zs.size: ',self.zs.size
+    #print 'zs.size: ',self.zs.size
 
     #Get the matter power spectrum interpolation object (based on RectBivariateSpline). 
     #return_z_k = True
     return_z_k = False
-    print 'get matter power interpolator...'
+    #print 'get matter power interpolator...'
     if return_z_k:
         self.PK, self.zArray, self.kArray = \
             camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
@@ -343,7 +346,7 @@ class MatterPower:
         self.PK = camb.get_matter_power_interpolator(self.pars, nonlinear=nonlinear, 
             hubble_units=hunits, k_hunit=hunits, kmax=kmax,k_per_logint=k_per_logint,
             var1=myVar1,var2=myVar2, zmax=self.zstar)
-    print 'got it.'
+    #print 'got it.'
         
     #Get H(z) values (in Mpc^-1 units)
     #print 'calculating H(z) at each z...'
@@ -457,6 +460,90 @@ def getDNDZ(binNum=1,BPZ=True):
   z, dNdz = np.loadtxt(myFileName,unpack=True,delimiter=', ')
   return z, dNdz
 
+def getDNDZM(binNum=1,nBins=16,BPZ=True):
+  """
+    function to load dN/dz(z) data points from file
+    This uses Marcel's "optimistic" dN/dz
+    Note:
+      data was sent to me from Byeonghee Yu
+      data files should be in directory dNdz
+    Inputs:
+      binNum: integer in range(nBins).
+        each corresponds to a redshift bin using Byeonghee's predefined bins.
+        If binNum ==0: unbinned dndz is returned
+      nBins: select which set of bins to use.
+        available options are 6,16
+      BPZ: does nothing.  Left here for backward-compatibility
+    Returns:
+      z, dNdz(z)
+  """
+  # load the full dNdz
+  myDir = 'dNdz/'
+  filename = 'dndz_LSST_i27_SN5_3y.csv'
+  myFileName = myDir+filename
+  zs, dNdz = np.loadtxt(myFileName,unpack=True,delimiter=',')
+    
+  #print 'getDNDZM'
+  #print zs
+  #print dNdz
+    
+  # add in zero point at beginning
+  zs = np.insert(zs,0,0)
+  dNdz = np.insert(dNdz,0,0)
+  
+  # beesBins edges
+  if nBins == 6:
+      binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+  elif nBins == 16:
+      binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                  2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+  else:
+      print '!!!!! wrong nBins for beesBins detected !!!!!'
+      return 0
+
+  # select bin
+  zmin = 0; zmax = 7
+  if binNum == 0:
+      zs = np.append(zmin,zs) # not sure if zmin will always work
+      myDNDZ = np.append(0,dNdz)
+      zs = np.append(zs,zmax) #zs[-1])  # not sure if zmax will always work
+      myDNDZ = np.append(myDNDZ,0)
+      indLowZRight = 0; indHighZRight = -1
+  else:    
+      # get interpolator
+      dndzInterp = interp1d(zs,dNdz)
+      # find indices of z points immediately right of (or equal to) bin endpoints
+      lowZ = binEdges[binNum-1]; highZ = binEdges[binNum]
+      indLowZRight = 0; indHighZRight = 0 
+      while zs[indLowZRight]<=lowZ: indLowZRight +=1
+      while zs[indHighZRight]<=highZ: indHighZRight +=1
+        
+      # add bin endpoints into arrays if not there already
+      if zs[indLowZRight] != lowZ:
+          zs = np.insert(zs,indLowZRight,lowZ)
+          dNdz = np.insert(dNdz,indLowZRight,dndzInterp(lowZ))
+          toAdd = 1 # move the next endpoint one over in the array since one was inserted here
+      else:
+          toAdd = 0
+      if zs[indHighZRight] != highZ:
+          zs = np.insert(zs,indHighZRight+toAdd,highZ)
+          dNdz = np.insert(dNdz,indHighZRight+toAdd,dndzInterp(highZ))
+        
+      # add in endpoints at zero magnitude
+      zs = np.insert(zs,indLowZRight,lowZ)
+      dNdz = np.insert(dNdz,indLowZRight,0)
+      zs = np.insert(zs,indHighZRight+toAdd+2,highZ) # +1 due to insertion in previous 2 lines
+      dNdz = np.insert(dNdz,indHighZRight+toAdd+2,0)
+    
+      # zero out regions ouside of bin
+      dNdz[:indLowZRight] = np.zeros(indLowZRight)
+      dNdz[indHighZRight+2*(toAdd+1):] = np.zeros(dNdz.__len__()-(indHighZRight+2*(toAdd+1)))
+        
+      #myDNDZ = tophat(dNdz,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True)
+      #print 'zs: ',zs
+      myDNDZ = dNdz
+    
+  return zs, myDNDZ  
 
 def extendZrange(zmin,zmax,nBins,binSmooth):
   """
@@ -513,6 +600,8 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=4.0,nZvals=100,dndzMode=2,
       should cover slightly larger region than bin of interest for full interpolation
   """
   if dndzMode == 1:
+    """
+    # my orgiginal version
     zmin = 0.0
     zmax = 1.5 # match dndz files
     zs = np.linspace(zmin,zmax,nZvals)
@@ -526,12 +615,29 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=4.0,nZvals=100,dndzMode=2,
       zs,myDNDZ = getDNDZ(binNum=binNum,BPZ=BPZ)
       zs     = np.concatenate([[zmin],zs,[zmax]])
       myDNDZ = np.concatenate([[0.],myDNDZ,[0.] ])
+    """
+    # version for Marcel's DNDZ
+    zmin = 0.0
+    zmax = 7.0 # match dndz files
+    zs = np.linspace(zmin,zmax,nZvals)
+    if binNum==0:
+      myDNDZvals = np.zeros(nZvals)
+      for bN in range(1,16): #can not include 0 in this range
+        myFunc = getDNDZinterp(binNum=bN,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=1)
+        myDNDZvals += myFunc(zs)
+      myDNDZ = myDNDZvals
+    else:
+      zs,myDNDZ = getDNDZM(binNum=binNum,nBins=16)
+      zs     = np.concatenate([zs,[zmax]])
+      myDNDZ = np.concatenate([myDNDZ,[0.] ])
+
+
   elif dndzMode == 2:
     # do nZvals*nBins+1 to get bin ends in set
     zs = np.linspace(zmin,zmax,nZvals*nBins+1)
     #zs = np.linspace(zmin,zmax,nZvals)
-    #myDNDZ = modelDNDZ(zs,z0)
-    myDNDZ = modelDNDZ3(zs,z0)
+    myDNDZ = modelDNDZ(zs,z0)
+    #myDNDZ = modelDNDZ3(zs,z0)
     myDNDZ = tophat(myDNDZ,zs,zmin,zmax,nBins,binNum)
 
     #binEdges =np.linspace(zmin,zmax,nBins+1)
@@ -553,6 +659,8 @@ def getDNDZratio(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
   """
     Purpose:
       get interpolator for ratio of (dNdz)_i/(dNdz)_tot data points
+      This function makes sense to use with overlapping bins. 
+      Otherwise, tophat properties should be exploited.
     Inputs:
       binNum: integer in {1,2,3,4,5}.
         each corresponds to a redshift bin of width Delta.z=0.2:
@@ -635,7 +743,8 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
     FofZ: array of a function evaluated at a set of redshifts
     zs: redshift(s) at which FofZ was evaluated
     zmin,zmax: minimum,maximum z to use when slicing FofZ into sections
-    nBins: number of evenly spaced sections to divide (0,zmax) into
+    nBins: number of evenly spaced sections to divide (0,zmax) into;
+      or which set of binEdges to use if beesBins ==True
     binNum: which bin to return.  bin starting at z=zmin is number 1,
       bin ending at z=zmax is bin number nBins
       Must have 0 < binNum <= nBins, 
@@ -644,8 +753,10 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
       useful for interpolation over entire bin if bin edges are not included in zs
       Default: False
     beesBins: a hack to make non-equally sized bins, to match Byeonghee's bins.
-      If true, bin edges will be 0,0.5,1,2,3,4,7. 
-      nBins must be 6 or an error will be raised and 0 will be returned.
+      If true, bin edges will be 0,0.5,1,2,3,4,7 (with nBins=6),
+        or 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+           2.3, 2.6, 3.0, 3.5, 4.0, 7.0 (with nBins=16)
+      nBins must be 6 or 16 or an error will be raised and 0 will be returned.
       Default: False
   Returns:
     Tophat slice of FofZ function
@@ -655,6 +766,9 @@ def tophat(FofZ,zs,zmin,zmax,nBins,binNum,includeEdges=False,beesBins=True):
   if beesBins:
     if nBins == 6:
       binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+    elif nBins == 16:
+      binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                  2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
     else:
       print '!!!!! wrong nBins for beesBins detected !!!!!'
       return 0
@@ -702,7 +816,8 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
       normalization factor
 
   """
-  # select redshift points to work with
+  # select redshift points to work with 
+  # these will be the y coords for creating interp
   myZs = zs[np.where(np.logical_and( zs>binZmin, zs<binZmax ))]
   myZs = np.append([binZmin],myZs)
   myZs = np.append(myZs,[binZmax])
@@ -714,11 +829,11 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
     manyZs = myZs
   else:
     stepSize = 1./(normPoints+1) # +1 for endpoint
-    xp = np.arange(myZs.size) # x coords for interp
+    xp = np.arange(myZs.size) # x coords for creating interp; same length as myZs
     if verbose: print myZs.size,stepSize,myZs.size-stepSize
-    targets = np.arange(0,myZs.size-1+stepSize,stepSize) # y coords for interp
+    targets = np.arange(0,myZs.size+stepSize,stepSize) # x coords to interp at
     if verbose: print 'targets: ',targets
-    manyZs = np.interp(targets,xp,myZs)
+    manyZs = np.interp(targets,xp,myZs) # returns y values corresponding to target x points
 
   if verbose: print 'manyZs: ',manyZs
 
@@ -746,8 +861,6 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
   if binZmax not in zs:
     myF = myF[:-1]
 
-
-
   # interpret redshifts as bin centers; ditch first and last z
   #myF = myF[1:-1]
 
@@ -757,6 +870,67 @@ def normBin(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
   area = np.dot(myF,deltaZs)
 
   return 1./area
+
+
+def normBin2(FofZ,binZmin,binZmax,zs,normPoints,verbose=False):
+  """
+    Purpose:
+      Find normalization factor for a function with a redshift bin
+    Note:
+      Centers between zs points are used for bin height when normalizing
+      This is a 2nd version of normbin which adds the further conditions:
+        binZmin and binZmax are included in array
+    Inputs:
+      FofZ: a function of redshift, z, to be normalized
+        Note: this can only be a function of one variable: z
+      binZmin, binZmax: redshift min, max for normalization range
+      zs: the points that redshift should eventually be evaluated at
+      normPoints: number of points between each point in zs to be used in calculation
+      verbose=False: set to true to have more output
+    Returns:
+      normalization factor
+
+  """
+  # select redshift points to work with 
+  # these will be the y coords for creating interp
+  myZs = zs[np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))]
+  nZs = myZs.__len__()
+
+  if verbose: 
+      print '\nmyZs: ',myZs,', nZs: ',nZs
+      print 'F(zs): ',FofZ(myZs)
+        
+
+  # add in normPoints number of points in between each point in myZs
+  if normPoints == 0:
+    manyZs = myZs
+  else:
+    stepSize = 1./(normPoints+1) # +1 for endpoint
+    xp = np.arange(myZs.size) # x coords for creating interp; same length as myZs
+    if verbose: print myZs.size,stepSize,myZs.size-stepSize
+    targets = np.arange(0,myZs.size+stepSize,stepSize) # x coords to interp at
+    if verbose: print 'targets: ',targets
+    manyZs = np.interp(targets,xp,myZs) # returns y values corresponding to target x points
+
+  if verbose: print 'manyZs: ',manyZs
+        
+  # get interval widths: spacing between 
+  deltaZs = manyZs[1:]-manyZs[:-1] #will have nZs-1 elements
+  
+  if verbose: print 'deltaZs: ',deltaZs
+
+  # evaluate FofZ
+  myF = FofZ(manyZs)
+  myFCenters = (myF[1:]+myF[:-1])/2.
+
+  # area under curve
+  area = np.dot(myFCenters,deltaZs)
+
+  return 1./area
+
+
+  
+
 
 
 def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
@@ -773,7 +947,7 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
       zs: the redshifts to calculate DNDZ at
         redshift values outside range (zmin,zmax) will return zero
       dndzMode: indicate which method to use to select dNdz curves
-        1: use observational DES-SV data from Crocce et al
+        1: use observational DES-SV data from Crocce et al ... or Marcel S.
         2: use LSST model distribution, divided into rectagular bins (Default)
       Parameters used only in dndzMode = 2:
         z0: controls width of distribution
@@ -796,12 +970,45 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
     print 'die screaming'
     return 0
 
+  # divide redshift range into bins and select desired bin
+  if beesBins or dndzMode == 1:
+      if nBins == 6:
+          binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+      elif nBins == 16:
+          binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                  2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+      else:
+          print '!!!!! wrong nBins for beesBins detected !!!!!'
+          return 0
+  else:
+      binEdges = np.linspace(zmin,zmax,nBins+1)
+  binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
+  binZmax = binEdges[binNum]
+  if binNum == 0: # or for the original version of dndzMode1, which I may never switch back to
+      binZmin = zmin
+      binZmax = zmax
+
+  # select bin indices
+  binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
+
+
   # get dNdz
   if dndzMode == 1:
-    zmax = 1.5 # hard coded to match domain in dndz files
-    rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=1)
-    binZmin = zmin
-    binZmax = zmax
+    #zmax = 1.5 # hard coded to match domain in dndz files
+    zmax = 7.0 # hard coded to match domain in dndz files
+    #rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=1)
+    zsFF,dndz = getDNDZM(binNum=binNum,nBins=nBins) # FF for "from file"
+               # this inserts high and low bin edges and zeroes all points outside bin
+    
+    # interpolate, as in getDNDZinterp
+    lowZInd = np.where(zsFF == binZmin)[0][1]
+    highZInd = np.where(zsFF == binZmax)[0][1]
+    rawDNDZ = interp1d(zsFF[lowZInd:highZInd],dndz[lowZInd:highZInd])
+    
+    # get normalization factor
+    # zsFF has bin edges inserted by getDNDZM, zs doesn't
+    normFac = normBin2(rawDNDZ,binZmin,binZmax,zsFF,normPoints,verbose=True)
+    
   elif dndzMode == 2:
     # extend Z range for smoothing
     extraZ,extraBins = extendZrange(zmin,zmax,nBins,binSmooth)
@@ -811,21 +1018,6 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
     rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=2,
                             binSmooth=binSmooth,z0=z0,nBins=nBins)
 
-    # divide redshift range into bins and select desired bin
-    if beesBins:
-        if nBins == 6:
-          binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
-        else:
-          print '!!!!! wrong nBins for beesBins detected !!!!!'
-          return 0
-    else:
-        binEdges = np.linspace(zmin,zmax,nBins+1)
-    binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
-    binZmax = binEdges[binNum]
-    if binNum == 0:
-      binZmin = zmin
-      binZmax = zmax
-
     if binSmooth != 0:
       # adjust binZmin, binZmax to appropriate cutoff for smoothed bin
       numSigmas = 4 # should match what is in gSmooth function
@@ -834,29 +1026,25 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
       if binZmin < 0:
         binZmin = 0
 
+    
+    # get normalization factor
+    normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,
+                    verbose=verbose)
+
   else: # really, it should be dndzMode = 1 or 2
     print 'covfefe!'
     return 0
-
-  # select bin indices
-  binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
-
-  # get normalization factor
-  normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,
-                    verbose=verbose)
 
   # get non-normalized DNDZ
   binDNDZ = rawDNDZ(zs[binIndices])
   myDNDZ = np.zeros(zs.size)
   myDNDZ[binIndices] = binDNDZ
-  
-  if verbose:
-    myZs = zs[np.where(np.logical_and( zs>=binZmin, zs<binZmax ))]
-    print 'zs in getNormalizedDNDZbin: ',myZs
 
   # normalize
   normDNDZ = normFac*myDNDZ
 
+  if verbose:  print 'zs in getNormalizedDNDZbin: ',zs[binIndices]
+    
   return normDNDZ
 
 
@@ -1069,7 +1257,8 @@ def winGalaxies(myPk,biases=None,BPZ=True,dndzMode=2,
     else: # do not do normalization
       if dndzMode == 1:
         zmin = 0.0
-        zmax = 1.5 # hard coded to match domain in dndz files
+        #zmax = 1.5 # hard coded to match domain in dndz files
+        zmax = 7.0 # hard coded to match domain in dndz files
       rawDNDZ = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,z0=z0,
                               dndzMode=dndzMode,binSmooth=binSmooth,nBins=nBins)
       myDNDZ = rawDNDZ(zs) 
@@ -1111,7 +1300,7 @@ def winKappa(myPk,biases=None):
 
 
 def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
-                  dndzMode=2,binSmooth=0,zs=None):
+                  dndzMode=2,binSmooth=0,zs=None,tophatBins=True):
   """
     Purpose:
       get interpolation function for winKappa(z)
@@ -1136,6 +1325,9 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
         Default: 0 (no smoothing)
       zs: optional array of z values to evaluate winKappa at.  
         If not specified or is None, myPk.zs will be used.
+      tophatBins: set to True to indicate tophat bins in dndzMode==1
+        Should match what is used for dndz bins.  Not used in dndzMode=2.
+        Default: True
     Returns:
       function for interpolating winKappa(z) result
   """
@@ -1148,11 +1340,18 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
   zs = np.insert(zs,0,0)
   winK = np.insert(winK,0,0)
 
+  # if tophatBins is selected, force binning as in dndzMode2
+  if tophatBins:
+    dndzMode = 2
+
   # slice out the bin of interest
   if dndzMode == 1: # use observational dndz
-    nBins = 5
+    #nBins = 5
+    #mode1zmin = 0
+    #mode1zmax = 1.5 # match the dndz files
+    nBins = 16
     mode1zmin = 0
-    mode1zmax = 1.5 # match the dndz files
+    mode1zmax = 7.0 # match the dndz files
     if binNum != 0:
       binIndices = np.where(np.logical_and( zs>=mode1zmin, zs<=mode1zmax ))
       notBinIndices = np.where(np.logical_or( zs<mode1zmin, zs>mode1zmax ))
@@ -1313,7 +1512,8 @@ def getNormalizedWinKbin(myPk,binNum,zs,zmin=0.0,zmax=4.0,nBins=1,dndzMode=2,
   # get binZmin, binZmax for normalization range
   if dndzMode == 1:
     zmin = 0.0
-    zmax = 1.5 # hard coded to match dndz files
+    #zmax = 1.5 # hard coded to match dndz files
+    zmax = 7.0 # hard coded to match dndz files
     binZmin = zmin
     binZmax = zmax
   elif dndzMode == 2:
@@ -1442,9 +1642,12 @@ class Window:
     """
     # check dndzMode
     if dndzMode == 1:
+        #zmin = 0
+        #zmax = 1.5
+        #nBins = 5
         zmin = 0
-        zmax = 1.5
-        nBins = 5
+        zmax = 7.0
+        nBins = 16
 
     # store parameters
     self.zmin  = zmin
@@ -1737,7 +1940,96 @@ def plotDNDZratio(zmin=0.0,zmax=1.5):
       title='TPZ'
     plt.title(title)
     plt.show()
+    
+def plotDNDZM(binned=True,nBins=16,logy=True,zmin=0,zmax=7,gold=False,doNorm=True):
+    """
+    plot Marcel's dndz using getDNDZM function
+    nBins must be 6 or 16 for beesBins compatibility
+    gold: set to True to use gold sample instead of Marcel's
+    doNorm: set to True to normalize bins (if binned)
+    """
+    normPoints = 1000
+    if binned:
+        # divide redshift range into bins and select desired bin
+        beesBins = True
+        if beesBins:
+            if nBins == 6:
+              binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+            elif nBins == 16:
+              binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                      2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+            else:
+              print '!!!!! wrong nBins for beesBins detected !!!!!'
+              return 0
+        else:
+            binEdges = np.linspace(zmin,zmax,nBins+1)
+        
+        for binNum in range(1,nBins+1):
+            if gold:
+                dndzInterp = getDNDZinterp(binNum=binNum,zmin=0.0,zmax=7.0,
+                                           nZvals=100,dndzMode=2,z0=0.3,
+                                           nBins=nBins,binSmooth=0)
+                zs = np.linspace(zmin,zmax,1000)
+                dndz =dndzInterp(zs)
+            else:
+                zs,dndz = getDNDZM(binNum=binNum,nBins=nBins) 
+                # this inserts high and low bin edges and zeroes all points outside bin
+                
+            if doNorm:  # mostly copied from getNormalizedDNDZbin
+              binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
+              binZmax = binEdges[binNum]
+              
+              # interpolate, as in getDNDZinterp
+              lowZInd = np.where(zs == binZmin)[0][1]
+              highZInd = np.where(zs == binZmax)[0][1]
+              rawDNDZ = interp1d(zs[lowZInd:highZInd],dndz[lowZInd:highZInd])
+                
+              # select bin indices
+              #binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
 
+              # get normalization factor
+              #normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,
+              #                  verbose=verbose)
+              normFac = normBin2(rawDNDZ,binZmin,binZmax,zs,normPoints,
+                                verbose=True)
+
+              # get non-normalized DNDZ
+              #binDNDZ = rawDNDZ(zs[binIndices])
+              #myDNDZ = np.zeros(zs.size)
+              #myDNDZ[binIndices] = binDNDZ
+
+              # normalize
+              #normDNDZ = normFac*myDNDZ
+                
+              dndzBin = np.zeros(zs.__len__())
+              dndzBin[lowZInd:highZInd] = normFac*rawDNDZ(zs[lowZInd:highZInd])
+              #dndz = rawDNDZ(zs)
+
+                
+                
+            if logy:
+                plt.semilogy(zs,dndzBin)
+            else:
+                plt.plot(zs,dndzBin)
+            #plt.xlim([zmin,zmax])
+            #plt.ylim([9e-3,8e1])
+            #plt.show()
+    else:
+        if gold:
+            dndzInterp = getDNDZinterp(binNum=0,zmin=0.0,zmax=7.0,
+                                           nZvals=100,dndzMode=2,z0=0.3,nBins=nBins,binSmooth=0)
+            zs = np.linspace(zmin,zmax,1000)
+            dndz = dndzInterp(zs)
+        else:
+            zs,dndz = getDNDZM(binNum=0)
+        if logy:
+            plt.semilogy(zs,dndz)
+        else:
+            plt.plot(zs,dndz)
+    plt.xlim([zmin,zmax])
+    plt.xlim([1,2])
+    plt.ylim([9e-3,8e1])
+    plt.show()
 
 def plotRedshiftAppx(myPk,dndzMode=1,BPZ=True,nBins=5):
   """
@@ -1874,9 +2166,12 @@ def plotGG(myPk,biasK=ones,biasG=ones,lmin=2,lmax=2500,
     binSmooth:
   """
   if dndzMode == 1:
+      #zmin = 0
+      #zmax = 1.5
+      #nBins = 5
       zmin = 0
-      zmax = 1.5
-      nBins = 5
+      zmax = 7.0
+      nBins = 16
   myWin = Window(myPk,zmax=zmax,nBins=nBins,biasK=ones,biasG=ones,
                  dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
                  binSmooth=binSmooth,biasByBin=biasByBin)
@@ -1997,7 +2292,8 @@ def plotWinKbins(myPk,zmin=0.0,zmax=4.0,nBins=10,doNorm=False,normPoints=100,
   zs = np.linspace(zmin,zmax,normPoints*nBins+1)
   biases = None
   if dndzMode == 1:
-    nBins = 5 # to match dndz files
+    #nBins = 5 # to match dndz files
+    nBins = 16 # to match dndz files
   for binNum in range(1,nBins+1):
     if doNorm:
       winKbin = getNormalizedWinKbin(myPk,binNum,zs,zmin=zmin,zmax=zmax,

@@ -80,6 +80,10 @@
     Fixed the shape of the noiseClsP array; ZK, 2018.04.23
     Specified primary CMB unit to be 'muK'; 
       Created parameter set including H0, omk; ZK, 2018.04.27
+    Added 16-bin option for beesBins shot noise; ZK, 2018.05.08
+    Added kludge to use Marcel's dndz in dndzMode = 1; ZK, 2018.05.16
+    Fixed lminP omission in makeFisher for TE; ZK, 2018.05.28
+    Cut deltaP values in half to match B's dP; ZK, 2018.05.29
 
 """
 
@@ -197,9 +201,17 @@ class FisherMatrix:
 
     # modify for dndzMode = 1
     if dndzMode == 1:
+      """
+      # the original version
       nBins = 5
       zmin = 0
       zmax = 1.5 # to match dndz files
+      """
+      # new version for beesBins16 and Marcel's dndz
+      nBins = 16
+      zmin = 0.0
+      zmax = 7.0
+      print 'using dndzMode = 1'
 
     # set other parameters
     self.nz = nz
@@ -226,6 +238,9 @@ class FisherMatrix:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
       tophatBins = False
+    
+    # quick kludge for Marcel's dndz
+    tophatBins = True
     
     # observables lists
     # self.obsList, obsListP created along with self.covar, covarP
@@ -254,9 +269,9 @@ class FisherMatrix:
     # parameters list:
     # step sizes for discrete derivatives: must correspond to paramList entries!
     #   from Allison et. al. (2015) Table III.
-    #nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
-    #paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
-    #deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
+    paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
+    deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
 
     # modified to use H0 instead of cosmomc_theta
     #nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
@@ -269,9 +284,12 @@ class FisherMatrix:
     #deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025, 0.01] #mnu one in eV
     
     # modified for just one param: omk
-    nCosParams = 1 # omk
-    paramList = ['omk']
-    deltaP =    [ 0.01]
+    #nCosParams = 1 # omk
+    #paramList = ['omk']
+    #deltaP =    [ 0.01]
+    
+    # cut deltaP in half to match Byeonghee's step sizes
+    deltaP /= 2.0
     
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
@@ -456,9 +474,9 @@ class FisherMatrix:
         # noise levels from a possible CMB-S4 design:
         nlev_t     = 1.   # temperature noise level, in uK.arcmin.
         nlev_p     = 1.414   # polarization noise level, in uK.arcmin.
-        #beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
+        beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
 
-        beam_fwhm  = 4.   # Gaussian beam full-width-at-half-maximum. 
+        #beam_fwhm  = 4.   # Gaussian beam full-width-at-half-maximum. 
         #From Hu & Okamoto's "near-perfect" experiment
 
         ells,EB_noise = ncl.getRecNoise(self.lmax,nlev_t,nlev_p,beam_fwhm)
@@ -470,22 +488,29 @@ class FisherMatrix:
         print 'getting galaxy shot noise... '
         # From Schaan et. al.: LSST n_source = 26/arcmin^2 for full survey
         #nbar = 26 # arcmin^-2
-        nbar = 66 # 66 arcmin^-2 to match Bye's value
+        nbar = 66 # 66 arcmin^-2 to match Bye's value for Marcel's "Optimistic" DnDz
+        #nbar = 40 # 40 for "Gold"
 
         # the selection of beesBins must be consistent with that which is selected in cp.tophat
-        #beesBins = True
-        beesBins = False
+        beesBins = True
+        #nBins = 6
+        nBins = 16
+        #beesBins = False
+        
         if beesBins:
-            binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
-            nBins = 6
+            if nBins == 6:
+                binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+            elif nBins == 16:
+                binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                            2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
         else:
             binEdges = np.linspace(self.zmin,self.zmax,self.nBins+1)
             nBins = self.nBins
 
         # the selection of dndz function must be consistent with that which is selected in cp.getDNDZinterp
         # myDNDZ must be a function only of z
-        #myDNDZ = lambda z: cp.modelDNDZ(z,z0)
-        myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
+        myDNDZ = lambda z: cp.modelDNDZ(z,z0)
+        #myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
 
         N_gg = ncl.shotNoise(nbar,binEdges,myDNDZ=myDNDZ)
 
@@ -498,8 +523,9 @@ class FisherMatrix:
         self.noiseCls = np.zeros(self.crossCls.shape)
         self.noiseCls[0,0] = Nlkk[self.lmin:self.lmax+1]
         for binNum in range(nBins):
-            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
-
+            #self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
+            # or scale by galaxy bias:
+            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)*self.binBs[binNum]**2
         if usePrimaryCMB:
             print 'getting (primary CMB) detector noise...'
             # CMBS4 v1
@@ -739,7 +765,7 @@ class FisherMatrix:
         #get the selected power spectra
         results = camb.get_results(pars)
         powers = results.get_cmb_power_spectra(pars, CMB_unit='muK')
-        myCl = powers[myClName]
+        myCl = powers[myClName]  #ummm... doing it this way probably creates all 6 spectra, then I throw away 5 of them.
         
         #store them
         #The different CL are always in the order TT, EE, BB, TE 
@@ -865,8 +891,9 @@ class FisherMatrix:
 
         # adjust lmax for TT case (not TE,EE)
         if TE: 
-          print 'adjusting lmax for TT... '
+          #print 'adjusting lmax for TT... '
           lmaxTT = 3000
+          # lmin should already be adjusted for by this point
           dClVec_i[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
           dClVec_j[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
         
@@ -897,7 +924,10 @@ class FisherMatrix:
       return array of centers of bins
     """
     if self.dndzMode == 1:
-      return (0.3,0.5,0.7,0.9,1.1)
+      #return (0.3,0.5,0.7,0.9,1.1)
+      binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                  2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+      return (np.array(binEdges[1:])+np.array(binEdges[:1]))/2
     elif self.dndzMode == 2:
       halfBinWidth = (self.zmax-self.zmin)/(2*self.nBins)
       nHalfBins = (2*np.arange(self.nBins)+1)
