@@ -32,7 +32,7 @@ def getRecNoise(lmax,nlev_t,nlev_p,beam_fwhm):
         Calculate reconstruction noise
         Currently default noise is for EB reconstruction
     Inputs:
-        lmax: maximum ell to return
+        lmax: maximum ell to return  !!!!!!!!!!!!!!!!!!!!!! re-do with different lmaxes to match M's paper !!!!!!!!!
         nlev_t: temperature noise level, in uK.arcmin.
         nlev_p: polarization noise level, in uK.arcmin.
         beam_fwhm: Gaussian beam full-width-at-half-maximum.
@@ -225,26 +225,29 @@ def shotNoise(nbar,binEdges,myDNDZ=cp.modelDNDZ3,nz=100000,verbose=False):
     # convert arcmin^-2 to sr^-1 : use (arcmin/rad)^2
     arcminPerRad = 60*180/np.pi
     nbarSr = nbar*(arcminPerRad)**2
-    #print 'nbar: ',nbar,'nbarSr: ',nbarSr
+    if verbose:
+        print 'nbar: ',nbar,'nbarSr: ',nbarSr
 
     myZs = np.linspace(binEdges[0],binEdges[-1],nz)
     normPoints = 1  #number of points between points in myZs
     for binNum in range(nBins):
         binAreas[binNum] = 1./cp.normBin(myDNDZ,binEdges[binNum],
                                          binEdges[binNum+1],myZs,normPoints)
-    #print 'binAreas: ',binAreas
+    if verbose:
+        print 'binAreas: ',binAreas
 
     areaSum = np.sum(binAreas)
     
     binFractions = binAreas/areaSum
     if verbose:
         print 'bin fractions: ',binFractions,', total: ',np.sum(binFractions)
-    #print 'bin fractions: ',binFractions
-
+    
     # get n_bar and Noise for each bin
     binNbars = nbarSr*binFractions
     N_gg = 1./binNbars
-    #print 'N_gg: ',N_gg
+    if verbose:
+        print 'N_gg: ',N_gg
+    
     return N_gg
 
 

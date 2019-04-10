@@ -84,6 +84,12 @@
     Added kludge to use Marcel's dndz in dndzMode = 1; ZK, 2018.05.16
     Fixed lminP omission in makeFisher for TE; ZK, 2018.05.28
     Cut deltaP values in half to match B's dP; ZK, 2018.05.29
+    Removed scaling shot noise by b^2; Switched kk conversion (from pp not dd);
+      Added Nl_kk factor of 1/2.5 to match M's paper; ZK, 2018.06.30
+    Fixed omission of dndzMode1 shot noise; ZK, 2018.07.07
+    Added set Casarini Halofit version at beginning of FisherMatrix.__init__;
+      ZK, 2018.07.12
+    Added dndzMode switch for nbar level; ZK, 2018.07.13
 
 """
 
@@ -145,7 +151,7 @@ class FisherMatrix:
           Default: True
         Parameters only used in dndzMode = 2:
           nBins: number of bins to create
-            Default: 10
+            Default: 10.  Overriden if dndzMode == 1
           z0: controls width of full dNdz distribution
             Defalut: 0.5, for use with cp.modelDNDZ3 for LSST distribution
           useWk: set to True to use W^kappa as dN/dz
@@ -170,6 +176,10 @@ class FisherMatrix:
     """
 ################################################################################
     # preliminaries
+    
+    # set Halofit version
+    print 'setting Halofit to Casarini (Halofit ver. 7)'
+    camb.set_halofit_version('casarini')
 
     # set cosmological parameters
     self.cosParams = {
@@ -208,6 +218,7 @@ class FisherMatrix:
       zmax = 1.5 # to match dndz files
       """
       # new version for beesBins16 and Marcel's dndz
+      #nBins = 6
       nBins = 16
       zmin = 0.0
       zmax = 7.0
@@ -289,7 +300,7 @@ class FisherMatrix:
     #deltaP =    [ 0.01]
     
     # cut deltaP in half to match Byeonghee's step sizes
-    deltaP /= 2.0
+    deltaP = np.array(deltaP)/2.0
     
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
@@ -480,21 +491,31 @@ class FisherMatrix:
         #From Hu & Okamoto's "near-perfect" experiment
 
         ells,EB_noise = ncl.getRecNoise(self.lmax,nlev_t,nlev_p,beam_fwhm)
+        # should I switch to using "Minimum Variance" (MV) combination instead of EB?
 
         # convert Nl^dd to Nl^kk
         # this formula is a reasonable guess based on Fourier analog.
-        Nlkk = EB_noise * ells*(ells+1)/4
+        #Nlkk = EB_noise * ells*(ells+1)/4
+        
+        # convert Nl^phiphi to Nl^kk; I think it's phiphi after all.
+        Nlkk = EB_noise * (ells*(ells+1)/2)**2
+        
+        # scale by factor of 1/2.5 as was done in Marcel's paper
+        Nlkk /= 2.5
 
         print 'getting galaxy shot noise... '
         # From Schaan et. al.: LSST n_source = 26/arcmin^2 for full survey
         #nbar = 26 # arcmin^-2
-        nbar = 66 # 66 arcmin^-2 to match Bye's value for Marcel's "Optimistic" DnDz
-        #nbar = 40 # 40 for "Gold"
+        if dndzMode == 1:
+            nbar = 66 # 66 arcmin^-2 to match Bye's value for Marcel's "Optimistic" dNdz
+        else:
+            nbar = 40 # 40 for "Gold"
+        self.nbar = nbar
 
         # the selection of beesBins must be consistent with that which is selected in cp.tophat
         beesBins = True
         #nBins = 6
-        nBins = 16
+        #nBins = 16
         #beesBins = False
         
         if beesBins:
@@ -507,10 +528,19 @@ class FisherMatrix:
             binEdges = np.linspace(self.zmin,self.zmax,self.nBins+1)
             nBins = self.nBins
 
-        # the selection of dndz function must be consistent with that which is selected in cp.getDNDZinterp
-        # myDNDZ must be a function only of z
-        myDNDZ = lambda z: cp.modelDNDZ(z,z0)
-        #myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
+        if dndzMode == 1:
+            zsFF,dndz = cp.getDNDZM(binNum=0) ## FF is "From File"
+            lowZInd = np.where(zsFF == binEdges[0])[0][1]
+            highZInd = np.where(zsFF == binEdges[-1])[0][1]
+            myDNDZ = interp1d(zsFF[lowZInd:highZInd],dndz[lowZInd:highZInd])
+        else: # dndzMode 2
+            # the selection of dndz function must be consistent with that which is selected in cp.getDNDZinterp
+            # myDNDZ must be a function only of z
+            myDNDZ = lambda z: cp.modelDNDZ(z,z0)
+            #myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
+
+        #rawDNDZ = cp.getDNDZinterp(binNum=0,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=dndzMode,
+        #                           binSmooth=binSmooth,z0=z0,nBins=nBins)
 
         N_gg = ncl.shotNoise(nbar,binEdges,myDNDZ=myDNDZ)
 
@@ -523,9 +553,9 @@ class FisherMatrix:
         self.noiseCls = np.zeros(self.crossCls.shape)
         self.noiseCls[0,0] = Nlkk[self.lmin:self.lmax+1]
         for binNum in range(nBins):
-            #self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
+            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
             # or scale by galaxy bias:
-            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)*self.binBs[binNum]**2
+            #self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)*self.binBs[binNum]**2
         if usePrimaryCMB:
             print 'getting (primary CMB) detector noise...'
             # CMBS4 v1
@@ -929,6 +959,7 @@ class FisherMatrix:
                   2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
       return (np.array(binEdges[1:])+np.array(binEdges[:1]))/2
     elif self.dndzMode == 2:
+      print 'getting bin centers assuming beesBins == False...'
       halfBinWidth = (self.zmax-self.zmin)/(2*self.nBins)
       nHalfBins = (2*np.arange(self.nBins)+1)
       return halfBinWidth*nHalfBins+self.zmin

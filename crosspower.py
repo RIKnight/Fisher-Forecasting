@@ -78,6 +78,9 @@
     Added getDNDZM function to implement Marcel's "optimistic" dndz; kludged
       getDNDZinterp to use instead of getDNDZ in dndzMode = 1; ZK, 2018.05.16
     Removed erroneous -1 from interpolator in normBin; ZK, 2018.06.01
+    Added details to plotDNDZM; ZK, 2018.06.05
+    Some streamlining of nBins for dndzMode1; needs more work; ZK, 2018.06.15
+    Modified byeBiasFit to use b(z)=1+z instead of 1+0.84*z; ZK, 2018.06.29 
 
 """
 
@@ -334,8 +337,8 @@ class MatterPower:
     #print 'zs.size: ',self.zs.size
 
     #Get the matter power spectrum interpolation object (based on RectBivariateSpline). 
-    #return_z_k = True
-    return_z_k = False
+    return_z_k = True
+    #return_z_k = False
     #print 'get matter power interpolator...'
     if return_z_k:
         self.PK, self.zArray, self.kArray = \
@@ -622,12 +625,12 @@ def getDNDZinterp(binNum=1,BPZ=True,zmin=0.0,zmax=4.0,nZvals=100,dndzMode=2,
     zs = np.linspace(zmin,zmax,nZvals)
     if binNum==0:
       myDNDZvals = np.zeros(nZvals)
-      for bN in range(1,16): #can not include 0 in this range
-        myFunc = getDNDZinterp(binNum=bN,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=1)
+      for bN in range(1,nBins): #can not include 0 in this range
+        myFunc = getDNDZinterp(binNum=bN,BPZ=BPZ,nBins=nBins,zmin=zmin,zmax=zmax,dndzMode=1)
         myDNDZvals += myFunc(zs)
       myDNDZ = myDNDZvals
     else:
-      zs,myDNDZ = getDNDZM(binNum=binNum,nBins=16)
+      zs,myDNDZ = getDNDZM(binNum=binNum,nBins=nBins)
       zs     = np.concatenate([zs,[zmax]])
       myDNDZ = np.concatenate([myDNDZ,[0.] ])
 
@@ -674,6 +677,7 @@ def getDNDZratio(binNum=1,BPZ=True,zmin=0.0,zmax=1.5,nZvals=100):
     Returns:
       interpolation function dNdz(z)
   """
+  # what about nBins in dndzMode1 here?
   numeratorInterp = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,
                                   nZvals=nZvals,dndzMode=1)
   denominatorInterp = getDNDZinterp(binNum=0,BPZ=BPZ,zmin=zmin,zmax=zmax,
@@ -1007,7 +1011,7 @@ def getNormalizedDNDZbin(binNum,zs,z0,zmax,nBins,BPZ=True,dndzMode=2,
     
     # get normalization factor
     # zsFF has bin edges inserted by getDNDZM, zs doesn't
-    normFac = normBin2(rawDNDZ,binZmin,binZmax,zsFF,normPoints,verbose=True)
+    normFac = normBin2(rawDNDZ,binZmin,binZmax,zsFF,normPoints,verbose=False)
     
   elif dndzMode == 2:
     # extend Z range for smoothing
@@ -1091,7 +1095,8 @@ def byeBiasFit():
     Returns:
       a function that can evaluate bias at redshift z, or redshifts z if an array is passed
   """
-  return lambda z: 1+0.84*z
+  #return lambda z: 1+0.84*z
+  return lambda z: 1+1.0*z
 
 
 def gaussian(x,mu,sig):
@@ -1349,7 +1354,8 @@ def getWinKinterp(myPk,biases=None,binNum=0,zmin=0,zmax=4,nBins=10,BPZ=True,
     #nBins = 5
     #mode1zmin = 0
     #mode1zmax = 1.5 # match the dndz files
-    nBins = 16
+    #nBins = 6
+    nBins = 16  # does this really need to be here?  Please get rid of it.
     mode1zmin = 0
     mode1zmax = 7.0 # match the dndz files
     if binNum != 0:
@@ -1647,7 +1653,8 @@ class Window:
         #nBins = 5
         zmin = 0
         zmax = 7.0
-        nBins = 16
+        #nBins = 6
+        nBins = 16 # does this need to be here? Please get rid of it.
 
     # store parameters
     self.zmin  = zmin
@@ -1895,7 +1902,7 @@ def replotDigitizedDNDZ(zmin=0.0,zmax=1.5):
 
   for BPZ in (True,False):
     for binNum in range(1,6):
-      myInterp = getDNDZinterp(binNum=binNum,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=1)
+      myInterp = getDNDZinterp(binNum=binNum,BPZ=BPZ,nBins=nBins,zmin=zmin,zmax=zmax,dndzMode=1)
       plt.plot(zs,myInterp(zs))
     if BPZ:
       title='BPZ'
@@ -1965,42 +1972,46 @@ def plotDNDZM(binned=True,nBins=16,logy=True,zmin=0,zmax=7,gold=False,doNorm=Tru
             binEdges = np.linspace(zmin,zmax,nBins+1)
         
         for binNum in range(1,nBins+1):
+            binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
+            binZmax = binEdges[binNum]
+              
             if gold:
                 dndzInterp = getDNDZinterp(binNum=binNum,zmin=0.0,zmax=7.0,
                                            nZvals=100,dndzMode=2,z0=0.3,
                                            nBins=nBins,binSmooth=0)
                 zs = np.linspace(zmin,zmax,1000)
                 dndz =dndzInterp(zs)
+                
+                lowZ = binEdges[binNum-1]; highZ = binEdges[binNum]
+                indLowZRight = 0; indHighZRight = 0 
+                while zs[indLowZRight]<=lowZ: indLowZRight +=1
+                while zs[indHighZRight]<=highZ: indHighZRight +=1
+
+                # add bin endpoints into arrays if not there already
+                if zs[indLowZRight] != lowZ:
+                  zs = np.insert(zs,indLowZRight,lowZ)
+                  dndz = np.insert(dndz,indLowZRight,dndzInterp(lowZ))
+                  toAdd = 1 # move the next endpoint one over in the array since one was inserted here
+                else:
+                  toAdd = 0
+                if zs[indHighZRight] != highZ:
+                  zs = np.insert(zs,indHighZRight+toAdd,highZ)
+                  dndz = np.insert(dndz,indHighZRight+toAdd,dndzInterp(highZ))
+
             else:
                 zs,dndz = getDNDZM(binNum=binNum,nBins=nBins) 
                 # this inserts high and low bin edges and zeroes all points outside bin
                 
             if doNorm:  # mostly copied from getNormalizedDNDZbin
-              binZmin = binEdges[binNum-1] # first bin starting at zmin has binNum=1
-              binZmax = binEdges[binNum]
-              
               # interpolate, as in getDNDZinterp
               lowZInd = np.where(zs == binZmin)[0][1]
               highZInd = np.where(zs == binZmax)[0][1]
               rawDNDZ = interp1d(zs[lowZInd:highZInd],dndz[lowZInd:highZInd])
                 
-              # select bin indices
-              #binIndices = np.where(np.logical_and( zs>=binZmin, zs<=binZmax ))
-
               # get normalization factor
-              #normFac = normBin(rawDNDZ,binZmin,binZmax,zs[binIndices],normPoints,
-              #                  verbose=verbose)
               normFac = normBin2(rawDNDZ,binZmin,binZmax,zs,normPoints,
                                 verbose=True)
 
-              # get non-normalized DNDZ
-              #binDNDZ = rawDNDZ(zs[binIndices])
-              #myDNDZ = np.zeros(zs.size)
-              #myDNDZ[binIndices] = binDNDZ
-
-              # normalize
-              #normDNDZ = normFac*myDNDZ
-                
               dndzBin = np.zeros(zs.__len__())
               dndzBin[lowZInd:highZInd] = normFac*rawDNDZ(zs[lowZInd:highZInd])
               #dndz = rawDNDZ(zs)
