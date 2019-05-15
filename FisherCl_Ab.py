@@ -36,7 +36,13 @@
     Added bin smoothing with Gaussian (dndzMode2); ZK, 2017.10.10
     Expanded cosmological parameter set for nuLambdaCDM; ZK, 2017.10.15
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
-    FisherCl branched into LCDMb and Ab version; This is Ab; ZK, 2017.10.16
+
+    FisherCl split into two versions. 
+      This version (FisherCl_Ab) uses parameters A b
+      The other (FisherCl) uses m nu LCDM b; ZK, 2017.10.16
+
+    Branched off of master.  This version reverts to function getCl doing
+      rough approximation to integration; ZK, 2017.12.13
 
 """
 

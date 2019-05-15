@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 """
   Name:
-    FisherCl
+    FisherCl (branch quickCl)
   Purpose:
     Calculate Fisher matrices for angular power spectra C_l as observables
   Uses:
@@ -36,38 +36,60 @@
     Added bin smoothing with Gaussian (dndzMode2); ZK, 2017.10.10
     Expanded cosmological parameter set for nuLambdaCDM; ZK, 2017.10.15
     Reparameterized from H0 to cosmomc_theta; ZK, 2017.10.16
-    FisherCl branched into LCDMb and Ab version; This is LCDMb; ZK, 2017.10.16
-    Added H0,Hs,zs to FisherMatrix object; ZK, 2017.10.20
 
     FisherCl split into two versions. 
-      This version (FisherCl) uses m nu LCDM b; ZK, 2017.10.16
       The other version (FisherCl_Ab) uses parameters A b
-    Converted biases arrays to functions for compatibility with updated
-      getCl function; ZK, 2017.10.27
-    Added option to use TT,TE,EE power spectra as observables; ZK 2017.10.30
-    Commented out omch2 adjustment with mnu variation; ZK, 2017.11.12
-    Added AccuracyBoost to FisherMatrix; ZK, 2017.11.14
-    Removed redundant Cl calculation since Sigma_i W_i = W is enforced in 
-      crosspower.py, and A_i is fixed; 
-      Added dark energy e.o.s. param w to Fisher var.s; ZK, 2017.11.15
-    Removed CLtools.  Planning on cosmicFish use later; ZK, 2017.11.25
-    Added epsabs and epsrel to FisherMatrix and getCl calls; ZK, 2017.12.13
+      This version (FisherCl) uses m nu LCDM b; ZK, 2017.10.16
+    Added H0,Hs,zs to FisherMatrix object; ZK, 2017.10.20
+
+    Branched off of master.  This version reverts to function getCl doing
+      rough approximation to integration; ZK, 2017.12.13
+    Removed CLtools; ZK, 2017.12.13
     Renamed cp.matterPower as cp.MatterPower; ZK, 2017.12.14
-    Modified to use cp.Window objects and new version of getCl; 
-      moved bin biasing to cp.Window; ZK, 2017.12.18
+    Modified to use cp.Window objects and new version of getCl; moved bin 
+      biasing to cp.Window; added w, AccuracyBoost to matrix params; 
+      ZK, 2017.12.18
     Added fieldNames and obsNames to FisherMatrix; ZK, 2017.12.19
     Added descriptive data to class MatterPower; ZK,2017.12.24
-    Implemented lmin along with lmax in MatterPower;  Added primary CMB 
-      Fisher functions to class MatterPower; ZK, 2017.12.25
-    Added nolinear parameter to MatterPower calls; ZK, 2018.01.11
-    Added camb import for use by usePrimaryCMB via pars; ZK, 2018.01.16
-    Adjusted deltaP dw from 0.3 to 0.05; ZK, 2018.02.06
-    Added neutrino_hierarchy field to FisherMatrix; 
-      Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.12
+    Modified FisherMatrix to use lmin; ZK, 2018.01.02
+    Pulled nonlinear parameter up to FisherMatrix.__init__; ZK, 2018.01.28
+    Adjusted deltaP dw from 0.3 to 0.05; ZK,
+      Added neutrino_hierarchy field to FisherMatrix; 
+      Fixed sign error in lmin correction in makeFisher; ZK, 2018.02.16
     Modified so MatterPower objects previously stored in myPksUpper and 
-      myPksLower are used immediatly then discarded; ZK, 2018.02.18 
+      myPksLower are used immediatly then discarded; ZK, 2018.02.17 
+    Added primary CMB Fisher functions to class MatterPower; 
+      Removed redundant Cl calculation since Sigma_i W_i = W is enforced
+      in crosspower.py, and A_i is fixed; ZK, 2018.02.19
     Fixed missing self. on self.crossClsP and other fixes 
       for primary CMB; ZK, 2018.02.23
+    Added noise to kappa, galxies, and primary CMB; control via useNoise param; 
+      Consolidated makeCovar codes to a function; 
+      Raised lminP, lmaxP to init parameters; ZK, 2018.03.10
+    Hard coded lmax values into FisherMatrix.makeFisher method; 
+      ZK, 2018.03.26
+    Set TE noise to zero, instead of having similar form to TT,EE noise;
+      ZK, 2018.04.10
+    Added Cl^BB and BB noise to primary CMB Fisher Matrix calculation;
+      Fixed major dark energy parameterization error: Re-organized code to 
+      accomodate the use of global variables; added wa param; ZK, 2018.04.15
+    Fixed an error in the deflection to kappa conversion in reconstruction 
+      noise; ZK, 2018.04.19
+    Fixed bin looping error in new getCrossCls functions; other minor fixes
+      to hastily updated code; ZK, 2018.04.20
+    Fixed the shape of the noiseClsP array; ZK, 2018.04.23
+    Specified primary CMB unit to be 'muK'; 
+      Created parameter set including H0, omk; ZK, 2018.04.27
+    Added 16-bin option for beesBins shot noise; ZK, 2018.05.08
+    Added kludge to use Marcel's dndz in dndzMode = 1; ZK, 2018.05.16
+    Fixed lminP omission in makeFisher for TE; ZK, 2018.05.28
+    Cut deltaP values in half to match B's dP; ZK, 2018.05.29
+    Removed scaling shot noise by b^2; Switched kk conversion (from pp not dd);
+      Added Nl_kk factor of 1/2.5 to match M's paper; ZK, 2018.06.30
+    Fixed omission of dndzMode1 shot noise; ZK, 2018.07.07
+    Added set Casarini Halofit version at beginning of FisherMatrix.__init__;
+      ZK, 2018.07.12
+    Added dndzMode switch for nbar level; ZK, 2018.07.13
 
 """
 
@@ -80,14 +102,13 @@ import camb
 #from camb import model, initialpower
 #from scipy import polyfit,poly1d
 import crosspower as cp
+import noiseCl as ncl
 
 # Dan Coe's CLtools (confidence limit; c2009), for Fisher Matrix, etc.
 #import CLtools as cl 
 
 ################################################################################
 # some functions
-
-
 
 
 
@@ -106,17 +127,21 @@ class FisherMatrix:
   """
 
 
-  def __init__(self,nz=10000,lmin=2,lmax=2000,zmin=0.0,zmax=16.0,dndzMode=2, 
-               nBins=10,z0=1.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
-               noAs=True,usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
-               epsrel=1.49e-2,epsabs=0,nonlinear=False,**cos_kwargs):
+  def __init__(self,nz=10000,lmin=2,lmax=3000,zmin=0.0,zmax=16.0,dndzMode=2, 
+               nBins=10,z0=0.5,doNorm=True,useWk=False,binSmooth=0,BPZ=True, 
+               usePrimaryCMB=False,biasByBin=True,AccuracyBoost=3,
+               nonlinear=False,useNoise=True,lminP=2,lmaxP=5000,**cos_kwargs):
     """
     
       Inputs:
         nz: the number of z points to use between here and last scattering surface
           Important usage is as the number of points to use in approximation of
             C_l integrals
-        lmin,lmax: minimum,maximum ell value to use in summations
+        lmin,lmax: minimum,maximum ell value to use in k,g summations
+          note: lmax used in creating Fij is now hard-coded to 
+            2000 for kk,kg,gg; 3000 for TT,TE; 5000 for EE
+        lminP,lmaxP: minimum,maximum ell value to use in T,E summations
+          note: see above note.
         zmin,zmax: minimum,maximum z to use in binning for A_i, b_i parameters
         doNorm: set to True to normalize dN/dz.
           Default: True
@@ -126,13 +151,13 @@ class FisherMatrix:
           Default: True
         Parameters only used in dndzMode = 2:
           nBins: number of bins to create
-            Default: 10
+            Default: 10.  Overriden if dndzMode == 1
           z0: controls width of full dNdz distribution
+            Defalut: 0.5, for use with cp.modelDNDZ3 for LSST distribution
           useWk: set to True to use W^kappa as dN/dz
             Defalut: False
           binSmooth: parameter that controls the amount of smoothing of bin edges
             Default: 0 (no smoothing)
-        noAs = True: does nothing.  Just here for backwards compatibility.
         usePrimaryCMB = True: set to True to include TT,TE,EE observables.
           In this implementation, we assume that the T and E fields are not
             correlated at all with the kappa and galaxies fields.
@@ -141,16 +166,20 @@ class FisherMatrix:
         AccuracyBoost: to pass to set_accuracy to set accuracy
           Note that this sets accuracy globally, not just for this object
           Default: 3
-        epsrel,epsabs: relative and absolute error margins to pass to quad.
-          whichever one is attained first ends the integration
         nonlinear: set to True to use Halofit for nonlinear evolution.
           Default: False
+        useNoise: set to True to add noise to primary CMB
+          Default: True
         Parameters for camb's set_params and set_cosmology:
           **cos_kwargs
 
     """
 ################################################################################
     # preliminaries
+    
+    # set Halofit version
+    print 'setting Halofit to Casarini (Halofit ver. 7)'
+    camb.set_halofit_version('casarini')
 
     # set cosmological parameters
     self.cosParams = {
@@ -166,7 +195,8 @@ class FisherMatrix:
         'r'     : 0,
         'kPivot': 0.05,
 
-        'w'     : -1.0, # DARK ENERGY!!!
+        'w'     : -1.0, # actually is w0 but CAMB calls it w
+        'wa'    : 0.0,
 
         # if fiducial mnu is changed, need to adjust omch2 as well
         'mnu'   : 0.06, # (eV)
@@ -181,9 +211,18 @@ class FisherMatrix:
 
     # modify for dndzMode = 1
     if dndzMode == 1:
+      """
+      # the original version
       nBins = 5
       zmin = 0
       zmax = 1.5 # to match dndz files
+      """
+      # new version for beesBins16 and Marcel's dndz
+      #nBins = 6
+      nBins = 16
+      zmin = 0.0
+      zmax = 7.0
+      print 'using dndzMode = 1'
 
     # set other parameters
     self.nz = nz
@@ -195,13 +234,13 @@ class FisherMatrix:
     self.z0 = z0
     self.lmin = lmin
     self.lmax = lmax
+    self.lminP = lminP
+    self.lmaxP = lmaxP
     self.AccuracyBoost=AccuracyBoost
     self.doNorm = doNorm
     self.useWk = useWk
     self.binSmooth = binSmooth
     self.biasByBin = biasByBin
-    self.epsrel = epsrel
-    self.epsabs = epsabs
     self.usePrimaryCMB = usePrimaryCMB
     self.nonlinear = nonlinear
     self.neutrino_hierarchy = cos_kwargs['neutrino_hierarchy']
@@ -210,35 +249,67 @@ class FisherMatrix:
       tophatBins = True # true if bins do not overlap, false if they do
     else:
       tophatBins = False
+    
+    # quick kludge for Marcel's dndz
+    tophatBins = True
+    
+    # observables lists
+    # self.obsList, obsListP created along with self.covar, covarP
     nMaps = nBins+1 # +1 for kappa map
-
-    # observables list: defined as self.obsList; created along with self.covar
     nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
+    self.fieldNames = ['k']
+    for binNum in range(1,nBins+1):
+        self.fieldNames.append('g'+str(binNum))
+    self.obsNames = []
+    for map1 in range(nMaps):
+      for map2 in range(map1, nMaps):
+        self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
     if usePrimaryCMB:
         nMapsP = 2 # T,E
-        nClsP = 3 # for TT,TE,EE (no crosses with k,g)
-        lminP = lmin #keep them the same for now
-        lmaxP = lmax #keep them the same for now
-        self.lminP = lminP
-        self.lmaxP = lmaxP
-
+        #nMapsP = 3 # T,E,B
+        nClsP = nMapsP*(nMapsP+1)/2
+        if nMapsP == 2:
+            self.fieldNamesP = ['T','E']
+            self.obsNamesP = ['TT','TE','EE']
+        elif nMapsP == 3:
+            self.fieldNamesP = ['T','E','B']
+            self.obsNamesP = ['TT','TE','EE','BB'] # TB etc?
+        else:
+            print 'uh oh, you didn\'t do that right.'
+    
     # parameters list:
-    nCosParams = 8 # 6 LCDM + Mnu + w
-    nParams = nCosParams+nBins # For lensing and galaxies, not primary
-    paramList = ['ombh2','omch2','cosmomc_theta','As','ns','tau','mnu','w']
+    # step sizes for discrete derivatives: must correspond to paramList entries!
+    #   from Allison et. al. (2015) Table III.
+    nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
+    paramList = ['ombh2','omch2','cosmomc_theta',  'As', 'ns','tau','mnu', 'w', 'wa']
+    deltaP =    [ 0.0008, 0.0030,      0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+
+    # modified to use H0 instead of cosmomc_theta
+    #nCosParams = 9 # 6 LCDM + Mnu + w0 + wa
+    #paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa']
+    #deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025] #mnu one in eV
+    
+    # modified to use H0 instead of cosmomc_theta, and include omk
+    #nCosParams = 10 # 6 LCDM + Mnu + w0 + wa + omk
+    #paramList = ['ombh2','omch2','H0',  'As', 'ns','tau','mnu', 'w', 'wa','omk']
+    #deltaP =    [ 0.0008, 0.0030, 0.1,0.1e-9,0.010,0.020,0.020,0.05,0.025, 0.01] #mnu one in eV
+    
+    # modified for just one param: omk
+    #nCosParams = 1 # omk
+    #paramList = ['omk']
+    #deltaP =    [ 0.01]
+    
+    # cut deltaP in half to match Byeonghee's step sizes
+    deltaP = np.array(deltaP)/2.0
+    
     for bin in range(nBins):
       paramList.append('bin'+str(bin+1))
-    self.nParams   = nParams
+    self.nParams   = nCosParams+nBins
     self.nCosParams = nCosParams
     self.paramList = paramList
 
-    # step sizes for discrete derivatives: must correspond to paramList entries!
-    #   from Allison et. al. (2015) Table III.
-    #deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.3] #mnu one in eV
-    deltaP = [0.0008,0.0030,0.0050e-2,0.1e-9,0.010,0.020,0.020,0.05] #mnu one in eV
-
     # get MatterPower object
-    print 'creating MatterPower object...'
+    print 'creating MatterPower object . . . '
     myPk = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,nonlinear=nonlinear,
                           **self.cosParams)
     PK,chistar,chis,dchis,zs,dzs,pars = myPk.getPKinterp()
@@ -246,36 +317,24 @@ class FisherMatrix:
     self.H0 = pars.H0
     self.Hs = myPk.Hs
     self.zs = myPk.zs
-    self.zstar = myPk.zstar
 
     # get Window object
-    print 'creating Window object...'
+    print 'creating Window object . . . '
     myWin = cp.Window(myPk,zmin=zmin,zmax=zmax,nBins=nBins,biasK=cp.ones,
                       biasG=cp.byeBias,dndzMode=dndzMode,z0=z0,
                       doNorm=doNorm,useWk=useWk,BPZ=BPZ,binSmooth=binSmooth,
                       biasByBin=biasByBin)
 
-    # extend zs range for interpolation functions
-    zs = np.hstack(([0],zs,self.zstar))
-
-    # get bucketloads more of them for numeric differentiation
-    print 'creating more matter power objects...'
+    # get modified parameter lists for numeric differentiation
+    print 'creating modified parameter lists . . . '
     myParams = self.cosParams
     myParamsUpper = []
     myParamsLower = []
-    #myPksUpper = []
-    #myPksLower = []
-    #myWinsUpper = []
-    #myWinsLower = []
-    myParsUpper = []
-    myParsLower = []
     for cParamNum in range(nCosParams):
-      print 'creating matter power spectra and window functions for ',\
-            paramList[cParamNum],' derivative...'
       # add parameter dictionary to lists; HAVE TO BE COPIES!!!
       myParamsUpper.append(myParams.copy())
       myParamsLower.append(myParams.copy())
-      # modify parameter number cParamNum in dictionaries
+      # modify parameter number cParamNum in ditionaries
       myParamsUpper[cParamNum][paramList[cParamNum]] += deltaP[cParamNum]
       myParamsLower[cParamNum][paramList[cParamNum]] -= deltaP[cParamNum]
 
@@ -291,31 +350,10 @@ class FisherMatrix:
         myParamsLower[cParamNum][paramList[omch2Index]] += deltaOmnh2
       """
 
-      #print 'cPramNum: ',cParamNum,', param name: ',paramList[cParamNum]
+      #print 'cParamNum: ',cParamNum,', param name: ',paramList[cParamNum]
       #print 'myParamsUpper[cParamNum][paramList[cParamNum]]: ',myParamsUpper[cParamNum][paramList[cParamNum]]
       #print 'myParamsLower[cParamNum][paramList[cParamNum]]: ',myParamsLower[cParamNum][paramList[cParamNum]]
       #print 'deltaP[cParamNum]: ',deltaP[cParamNum]
-
-
-
-      # this section moved to directly before their use to enable throwing 
-      #  out immediately afterward
-      """
-      # create MatterPower objects and add to lists
-      myPksUpper.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        nonlinear=nonlinear,**myParamsUpper[cParamNum]))
-      myPksLower.append(cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                        nonlinear=nonlinear,**myParamsLower[cParamNum]))
-      # create Window objects and add to lists
-      myWinsUpper.append(cp.Window(myPksUpper[cParamNum],zmin=zmin,zmax=zmax,
-                         nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
-                         dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
-                         BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin))
-      myWinsLower.append(cp.Window(myPksLower[cParamNum],zmin=zmin,zmax=zmax,
-                         nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
-                         dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
-                         BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin))
-      """
 
     # save some of this
     self.myPk = myPk
@@ -332,84 +370,34 @@ class FisherMatrix:
 
     # If I use AOfZ not all 1, this needs to be changed 
     #   to include summation over bins for kk
+    # If tophatBins, only the diagonal and 0th row and column will be filled
+    
+    print 'starting kappa, galaxy cross power (with entire kappa) . . . '
 
-    self.crossCls      = np.zeros((nMaps,nMaps,           lmax-lmin+1))
-    self.crossClsPlus  = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
-    self.crossClsMinus = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
+    #self.crossCls      = np.zeros((nMaps,nMaps,           lmax-lmin+1))
+    #self.crossClsPlus  = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
+    #self.crossClsMinus = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
 
-    # if tophatBins, only the diagonal and 0th row and column will be filled
-    print 'starting cross power with entire kappa... '
+    # get main set of power spectra    
+    self.crossCls = self.getCrossCls(['(All Fiducial)'],[myParams],myPk,
+                                     lmin,lmax,nBins,tophatBins=tophatBins)
+    # get the perturbed versions
+    print 'starting upper spectra for numeric derivatives . . . '
+    self.crossClsPlus = self.getCrossCls(paramList[:nCosParams],myParamsUpper,
+                                         myPk,
+                                         lmin,lmax,nBins,tophatBins=tophatBins)    
+    print 'starting lower spectra for numeric derivatives . . . '
+    self.crossClsMinus = self.getCrossCls(paramList[:nCosParams],myParamsLower,
+                                          myPk,
+                                          lmin,lmax,nBins,tophatBins=tophatBins)
+    
+    # reset global (dark energy and AccuracyBoost) settings
+    lpa = 5.0 # set_for_lmax also sets lensing 
+    pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
 
-    for cParamNum in range(nCosParams):
-        print 'calculating MatterPower and Window objects for ',\
-              paramList[cParamNum], ' derivative . . . '
-
-        # create MatterPower objects
-        myPksUpper = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                             nonlinear=nonlinear,**myParamsUpper[cParamNum])
-        myPksLower = cp.MatterPower(nz=nz,AccuracyBoost=AccuracyBoost,
-                             nonlinear=nonlinear,**myParamsLower[cParamNum])
-        # create Window objects
-        myWinsUpper = cp.Window(myPksUpper,zmin=zmin,zmax=zmax,
-                             nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
-                             dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
-                             BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
-        myWinsLower = cp.Window(myPksLower,zmin=zmin,zmax=zmax,
-                             nBins=nBins,biasK=cp.ones,biasG=cp.byeBias,
-                             dndzMode=dndzMode,z0=z0,doNorm=doNorm,useWk=useWk,
-                             BPZ=BPZ,binSmooth=binSmooth,biasByBin=biasByBin)
-
-        # save pars for use in primary CMB
-        myParsUpper.append(myPksUpper.pars)
-        myParsLower.append(myPksLower.pars)
-
-        for map1 in range(nMaps):
-          if map1==0:
-            cor1 = cp.Window.kappa
-          else:
-            cor1 = cp.Window.galaxies
-          for map2 in range(map1,nMaps):
-            print '  starting angular cross power spectrum ',map1,', ',map2,'... '
-            if map2==0:
-              cor2 = cp.Window.kappa
-            else:
-              cor2 = cp.Window.galaxies
-            # since nonoverlapping bins have zero correlation use this condition:
-            if map1==0 or map1==map2 or not tophatBins:
-
-              # this part does not need to iterate over cParamNum
-              if cParamNum == 0:
-                ells,Cls = cp.getCl(myPk,myWin,binNum1=map1,binNum2=map2,
-                                   cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                                   epsrel=epsrel,epsabs=epsabs)
-                self.crossCls[map1,map2] = Cls
-                self.crossCls[map2,map1] = Cls #symmetric
-
-              # now the adjustments for numeric derivatives
-              #for cParamNum in range(nCosParams):
-              #ells,Cls = cp.getCl(myPksUpper[cParamNum],myWinsUpper[cParamNum],
-              ells,Cls = cp.getCl(myPksUpper,myWinsUpper,
-                                  binNum1=map1,binNum2=map2,
-                                  cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                                  epsrel=epsrel,epsabs=epsabs)
-              self.crossClsPlus[map1,map2,cParamNum] = Cls
-              self.crossClsPlus[map2,map1,cParamNum] = Cls #symmetric
-              #ells,Cls = cp.getCl(myPksLower[cParamNum],myWinsLower[cParamNum],
-              ells,Cls = cp.getCl(myPksLower,myWinsLower,
-                                  binNum1=map1,binNum2=map2,
-                                  cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax,
-                                  epsrel=epsrel,epsabs=epsabs)
-              self.crossClsMinus[map1,map2,cParamNum] = Cls
-              self.crossClsMinus[map2,map1,cParamNum] = Cls #symmetric
-            
-        # ditch the MatterPower and Window objects
-        del myPksUpper
-        del myPksLower
-        del myWinsUpper
-        del myWinsLower
-
-    self.ells = ells # = np.arange(lmin,lmax+1, dtype=np.float64)
-
+    self.ells = np.arange(lmin,lmax+1)
+    
+    
     # this section needed for dCl/dAi or overlapping bins
     """
     # divide K,G into bins and get crossClbins
@@ -420,179 +408,200 @@ class FisherMatrix:
     # if tophatBins, only the diagonals will be filled
     # note: cp.getCl has a +1 offset to bin numbers, 
     #   since bin 0 indicates sum of all bins
-    print 'starting cross power with binned kappa... '
+    print 'starting cross power with binned kappa . . . '
     for bin1 in range(nBins):
       for bin2 in range(bin1,nBins):
         if bin1==bin2 or not tophatBins:
-          print 'starting angular cross power spectrum ',bin1+1,', ',bin2+1,'... '
+          print '  starting angular cross power spectrum',bin1+1,', ',bin2+1,'. . . '
           # kk
           ells,Cls = cp.getCl(myPk,myWin,binNum1=bin1+1,binNum2=bin2+1,
                            cor1=cp.Window.kappa,cor2=cp.Window.kappa,
-                           lmin=lmin,lmax=lmax,epsrel=epsrel,epsabs=epsabs)
+                           lmin=lmin,lmax=lmax)
           self.crossClBinsKK[bin1,bin2] = Cls
           self.crossClBinsKK[bin2,bin1] = Cls #symmetric
           # kg
           ells,Cls = cp.getCl(myPk,myWin,binNum1=bin1+1,binNum2=bin2+1,
                            cor1=cp.Window.kappa,cor2=cp.Window.galaxies,
-                           lmin=lmin,lmax=lmax,epsrel=epsrel,epsabs=epsabs)
+                           lmin=lmin,lmax=lmax)
           self.crossClBinsKG[bin1,bin2] = Cls
           self.crossClBinsKG[bin2,bin1] = Cls #symmetric
           # gg
           ells,Cls = cp.getCl(myPk,myWin,binNum1=bin1+1,binNum2=bin2+1,
                            cor1=cp.Window.galaxies,cor2=cp.Window.galaxies,
-                           lmin=lmin,lmax=lmax,epsrel=epsrel,epsabs=epsabs)
+                           lmin=lmin,lmax=lmax)
           self.crossClBinsGG[bin1,bin2] = Cls
           self.crossClBinsGG[bin2,bin1] = Cls #symmetric
     """
 
     # do the primary CMB component
-    # note: most of this is copied from above.  
-    #   Later I should consolidate the two versions into a function.
     if usePrimaryCMB:
-        pars = myPk.pars
-        lensLmax = lmaxP #3*lmaxP
-        lpa = 5.0 # set_for_lmax also sets lensing 
-        #   to be non-linear if lens_potential_accuracy>0
-        pars.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
-        pars.set_accuracy(AccuracyBoost=AccuracyBoost) #note: global setting
+        print 'starting primary CMB cross-power . . . '
+        #lpa = 5.0 # set_for_lmax also sets lensing 
+        #pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
         
-        #calculate results for these parameters
-        print 'getting Cl power spectrum'
-        results = camb.get_results(pars)
-
-        #get dictionary of CAMB power spectra
-        powers =results.get_cmb_power_spectra(pars)
-
         #get the total lensed CMB power spectra versus unlensed
         #myClName = 'total'
         myClName = 'unlensed_scalar'
-        myCl = powers[myClName]
+        
+        #self.crossClsP      = np.zeros((nMapsP,nMapsP,           lmaxP-lminP+1))
+        #self.crossClsPPlus  = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
+        #self.crossClsPMinus = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
 
-        # From pycamb:
-        #Python Cl arrays are all zero based (starting at L=0), 
-        #   Note L=0,1 entries will be zero by default.
-        #The different CL are always in the order TT, EE, BB, TE 
-        #   (with BB=0 for unlensed scalar results).
-
-        # re-arrange the data structure to be consistent with code in FisherMatrix
-        #nMapsP = 2 # T,E # defined above
-        self.crossClsP      = np.zeros((nMapsP,nMapsP,           lmaxP-lminP+1))
-        self.crossClsPPlus  = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
-        self.crossClsPMinus = np.zeros((nMapsP,nMapsP,nCosParams,lmaxP-lminP+1))
-
-        self.crossClsP[0,0] = myCl[lminP:lmaxP+1,0] # TT
-        self.crossClsP[0,1] = myCl[lminP:lmaxP+1,3] # TE
-        self.crossClsP[1,0] = myCl[lminP:lmaxP+1,3] # ET
-        self.crossClsP[1,1] = myCl[lminP:lmaxP+1,1] # EE
-
+        # get main set of power spectra
+        crossClsP = self.getCrossClsP(['(All Fiducial)'],[myParams],myPk,
+                                      nMaps=nMapsP,lmax=lmaxP,lpa=lpa,
+                                      myClName=myClName,
+                                      AccuracyBoost=AccuracyBoost)
         # get the perturbed versions
-        for paramNum in range(nCosParams):
-            print 'getting Primary CMB Cl power spectra for parameter ', \
-                  paramList[paramNum]
-            #parsUpper = myPksUpper[paramNum].pars
-            #parsLower = myPksLower[paramNum].pars
-            parsUpper = myParsUpper[paramNum]
-            parsLower = myParsLower[paramNum]
-            parsUpper.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
-            parsLower.set_for_lmax(lensLmax, lens_potential_accuracy=lpa)
-            parsUpper.set_accuracy(AccuracyBoost=AccuracyBoost)
-            parsLower.set_accuracy(AccuracyBoost=AccuracyBoost)
+        print 'starting upper spectra for numeric derivatives . . . '
+        crossClsPPlus  = self.getCrossClsP(paramList[:nCosParams],myParamsUpper,
+                                           myPk,
+                                           nMaps=nMapsP,lmax=lmaxP,lpa=lpa,
+                                           myClName=myClName,
+                                           AccuracyBoost=AccuracyBoost)
+        print 'starting lower spectra for numeric derivatives . . . '
+        crossClsPMinus = self.getCrossClsP(paramList[:nCosParams],myParamsLower,
+                                           myPk,
+                                           nMaps=nMapsP,lmax=lmaxP,lpa=lpa,
+                                           myClName=myClName,
+                                           AccuracyBoost=AccuracyBoost)
+        
+        self.crossClsP = crossClsP[:,:,lminP:]
+        self.crossClsPPlus = crossClsPPlus[:,:,:,lminP:]
+        self.crossClsPMinus = crossClsPMinus[:,:,:,lminP:]
+        
+        # reset global (dark energy and AccuracyBoost) settings
+        pars = myPk.getPars(lmax=lmax,lpa=lpa,AccuracyBoost=AccuracyBoost)
+      
+        self.ellsP = np.arange(lminP,lmaxP+1)
 
 
-            #calculate results for these parameters
-            resultsUpper = camb.get_results(parsUpper)
-            resultsLower = camb.get_results(parsLower)
+################################################################################
+    # create noise arrays
+    if useNoise:
+        print 'creating noise arrays... '
 
-            #get dictionary of CAMB power spectra
-            powersUpper =resultsUpper.get_cmb_power_spectra(parsUpper)
-            powersLower =resultsLower.get_cmb_power_spectra(parsLower)
-            
-            #get the selected power spectra
-            myClUpper=powersUpper[myClName]
-            myClLower=powersLower[myClName]
-            
-            #store them
-            self.crossClsPPlus[0,0,paramNum]  = myClUpper[lminP:lmaxP+1,0] # TT
-            self.crossClsPPlus[0,1,paramNum]  = myClUpper[lminP:lmaxP+1,3] # TE
-            self.crossClsPPlus[1,0,paramNum]  = myClUpper[lminP:lmaxP+1,3] # ET
-            self.crossClsPPlus[1,1,paramNum]  = myClUpper[lminP:lmaxP+1,1] # EE
+        print 'getting (EB) lensing reconstruction noise... '
+        # noise levels from a possible CMB-S4 design:
+        nlev_t     = 1.   # temperature noise level, in uK.arcmin.
+        nlev_p     = 1.414   # polarization noise level, in uK.arcmin.
+        beam_fwhm  = 1.   # Gaussian beam full-width-at-half-maximum.
 
-            self.crossClsPMinus[0,0,paramNum] = myClLower[lminP:lmaxP+1,0] # TT
-            self.crossClsPMinus[0,1,paramNum] = myClLower[lminP:lmaxP+1,3] # TE
-            self.crossClsPMinus[1,0,paramNum] = myClLower[lminP:lmaxP+1,3] # ET
-            self.crossClsPMinus[1,1,paramNum] = myClLower[lminP:lmaxP+1,1] # EE
+        #beam_fwhm  = 4.   # Gaussian beam full-width-at-half-maximum. 
+        #From Hu & Okamoto's "near-perfect" experiment
+
+        ells,EB_noise = ncl.getRecNoise(self.lmax,nlev_t,nlev_p,beam_fwhm)
+        # should I switch to using "Minimum Variance" (MV) combination instead of EB?
+
+        # convert Nl^dd to Nl^kk
+        # this formula is a reasonable guess based on Fourier analog.
+        #Nlkk = EB_noise * ells*(ells+1)/4
+        
+        # convert Nl^phiphi to Nl^kk; I think it's phiphi after all.
+        Nlkk = EB_noise * (ells*(ells+1)/2)**2
+        
+        # scale by factor of 1/2.5 as was done in Marcel's paper
+        Nlkk /= 2.5
+
+        print 'getting galaxy shot noise... '
+        # From Schaan et. al.: LSST n_source = 26/arcmin^2 for full survey
+        #nbar = 26 # arcmin^-2
+        if dndzMode == 1:
+            nbar = 66 # 66 arcmin^-2 to match Bye's value for Marcel's "Optimistic" dNdz
+        else:
+            nbar = 40 # 40 for "Gold"
+        self.nbar = nbar
+
+        # the selection of beesBins must be consistent with that which is selected in cp.tophat
+        beesBins = True
+        #nBins = 6
+        #nBins = 16
+        #beesBins = False
+        
+        if beesBins:
+            if nBins == 6:
+                binEdges = [0.0,0.5,1.0,2.0,3.0,4.0,7.0]
+            elif nBins == 16:
+                binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                            2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+        else:
+            binEdges = np.linspace(self.zmin,self.zmax,self.nBins+1)
+            nBins = self.nBins
+
+        if dndzMode == 1:
+            zsFF,dndz = cp.getDNDZM(binNum=0) ## FF is "From File"
+            lowZInd = np.where(zsFF == binEdges[0])[0][1]
+            highZInd = np.where(zsFF == binEdges[-1])[0][1]
+            myDNDZ = interp1d(zsFF[lowZInd:highZInd],dndz[lowZInd:highZInd])
+        else: # dndzMode 2
+            # the selection of dndz function must be consistent with that which is selected in cp.getDNDZinterp
+            # myDNDZ must be a function only of z
+            myDNDZ = lambda z: cp.modelDNDZ(z,z0)
+            #myDNDZ = lambda z: cp.modelDNDZ3(z,z0)
+
+        #rawDNDZ = cp.getDNDZinterp(binNum=0,BPZ=BPZ,zmin=zmin,zmax=zmax,dndzMode=dndzMode,
+        #                           binSmooth=binSmooth,z0=z0,nBins=nBins)
+
+        N_gg = ncl.shotNoise(nbar,binEdges,myDNDZ=myDNDZ)
 
 
 
+        # create noiseCls array to accompany crossCls: 
+        #  Nl^kk will be reconstruction noise
+        #  Nl^gigi will be shot noise
+        #  Nl^kg, Nl^gigj are zero because noise is uncorrelated
+        self.noiseCls = np.zeros(self.crossCls.shape)
+        self.noiseCls[0,0] = Nlkk[self.lmin:self.lmax+1]
+        for binNum in range(nBins):
+            self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)
+            # or scale by galaxy bias:
+            #self.noiseCls[binNum+1,binNum+1] = N_gg[binNum]*np.ones(self.lmax-self.lmin+1)*self.binBs[binNum]**2
+        if usePrimaryCMB:
+            print 'getting (primary CMB) detector noise...'
+            # CMBS4 v1
+            fwhm = 1; ST = 1; SP = ST*1.414
+            # CMBS4 v2
+            #fwhm = 2; ST = 1; SP = ST*1.414
+            noiseCMBS4_TT1 = ncl.noisePower(ST,ST,fwhm,self.ellsP)
+            #noiseCMBS4_TP1 = ncl.noisePower(ST,SP,fwhm,self.ellsP)
+            noiseCMBS4_PP1 = ncl.noisePower(SP,SP,fwhm,self.ellsP)
+
+            # assume zero TE noise
+            #zerosList = np.zeros(lmax+1)
+            #noiseCMBS4_TP1 = zerosList
+
+            # shape like crossCls
+            self.noiseClsP = np.zeros(self.crossClsP.shape)
+            self.noiseClsP[0,0] = noiseCMBS4_TT1
+            #self.noiseClsP[0,1] = noiseCMBS4_TP1
+            #self.noiseClsP[1,0] = noiseCMBS4_TP1
+            self.noiseClsP[1,1] = noiseCMBS4_PP1
+
+            if nMapsP == 3: # get the BB part
+                self.noiseClsP[2,2] = noiseCMBS4_PP1
+            else:
+                print 'bad nMaps for noise maker'
+
+    
+    else: # no noise
+        self.noiseCls = np.zeros(self.crossCls.shape)
+        if usePrimaryCMB:
+            self.noiseClsP = np.zeros(self.crossClsP.shape)
+   
+    
+    
+    
 ################################################################################
     # create covariance matrix
     print 'building covariance matrix... '
 
-    #nCls = nMaps*(nMaps+1)/2 # This way removes redundancies, eg C_l^kg = C_l^gk
-    # nCls defined above
-    self.covar = np.zeros((nCls,nCls,lmax-lmin+1))
-
-    # create obsList to contain base nMaps representation of data label
-    #   where kappa:0, g1:1, g2:2, etc.
-    #   eg, C_l^{kappa,g1} -> 0*nMaps+1 = 01 = 1
-    self.fieldNames = ['k']
-    for binNum in range(1,nBins+1):
-        self.fieldNames.append('g'+str(binNum))
-    self.obsList = np.zeros(nCls)
-    self.obsNames = []
-
-    for map1 in range(nMaps):
-      print 'starting covariance set ',map1+1,' of ',nMaps,'... '
-      for map2 in range(map1, nMaps):
-        covIndex1 = map1*nMaps+map2-map1*(map1+1)/2     # shortens the array
-        self.obsList[covIndex1] = map1*nMaps+map2       # base nMaps representation
-        self.obsNames.append(self.fieldNames[map1]+','+self.fieldNames[map2])
-        for map3 in range(nMaps):
-          for map4 in range(map3, nMaps):
-            covIndex2 = map3*nMaps+map4-map3*(map3+1)/2 # shortens the array
-            if covIndex1 <= covIndex2:
-              self.covar[covIndex1,covIndex2] = (self.crossCls[map1,map3]*self.crossCls[map2,map4] + self.crossCls[map1,map4]*self.crossCls[map2,map3] )/(2.*self.ells+1)
-            else:                                       # avoid double calculation
-              self.covar[covIndex1,covIndex2] = self.covar[covIndex2,covIndex1]
-
-    # invert covariance matrix
-    print 'inverting covariance matrix... '
-    # transpose of inverse of transpose is inverse of original
-    # need to do this to get indices in order that linalg.inv wants them
-    self.invCov = np.transpose(np.linalg.inv(np.transpose(self.covar)))
-
-    # do the primary CMB component
-    # note: most of this is copied from above.  
-    #   Later I should consolidate the two versions into a function.
+    # need noiseCls before running this
+    self.covar,self.invCov,self.ells,self.obsList = \
+        self.makeCovar(self.crossCls,self.noiseCls,self.lmin,self.lmax)
     if usePrimaryCMB:
-        covarP = np.zeros((nClsP,nClsP,lmaxP-lminP+1))
-        ellsP = np.arange(lminP,lmaxP+1)
-
-        # create obsList to contain base nMaps representation of data label
-        obsListP = np.zeros(nClsP)
-
-        for map1 in range(nMapsP):
-            print 'starting Primary CMB covariance set ',map1+1,' of ',nMaps,'... '
-            for map2 in range(map1, nMapsP):
-                covIndex1 = map1*nMapsP+map2-map1*(map1+1)/2     # shortens the array
-                obsListP[covIndex1] = map1*nMapsP+map2  # base nMaps representation
-                for map3 in range(nMapsP):
-                  for map4 in range(map3, nMapsP):
-                    covIndex2 = map3*nMapsP+map4-map3*(map3+1)/2 # shortens the array
-                    if covIndex1 <= covIndex2:
-                      covarP[covIndex1,covIndex2] = ( \
-                        self.crossClsP[map1,map3]*self.crossClsP[map2,map4] + \
-                        self.crossClsP[map1,map4]*self.crossClsP[map2,map3] )/ \
-                        (2.*ellsP+1)
-                    else:   # avoid double calculation
-                      covarP[covIndex1,covIndex2] = covarP[covIndex2,covIndex1]
-        self.covarP = covarP
-        self.ellsP = ellsP
-        self.obsListP = obsListP # I probably won't use this... so why???
-        self.obsNamesP = ['TT','TE','EE']
-
-        self.invCovP = np.transpose(np.linalg.inv(np.transpose(self.covarP)))
-
+        self.covarP,self.invCovP,self.ellsP,self.obsListP = \
+            self.makeCovar(self.crossClsP,self.noiseClsP,self.lminP,self.lmaxP)
+    
 
 
 ################################################################################
@@ -602,7 +611,8 @@ class FisherMatrix:
     # get dC_l^munu/da_i (one vector of derivatives of C_ls for each param a_i)
     # store as matrix with additional dimension for a_i)
     # uses same (shortened) nCls as self.covar and self.obsList
-    self.dClVecs = np.empty((nCls, nParams, lmax-lmin+1))
+    nCls = nMaps*(nMaps+1)/2
+    self.dClVecs = np.empty((nCls, self.nParams, lmax-lmin+1))
     Clzeros = np.zeros(lmax-lmin+1) # for putting into dClVecs when needed
     for map1 in range(nMaps):
       print 'starting derivative set ',map1+1,' of ',nMaps,'... '
@@ -641,12 +651,13 @@ class FisherMatrix:
           dClPlus  = self.crossClsPlus[map1,map2,pIdx]
           dClMinus = self.crossClsMinus[map1,map2,pIdx]
           self.dClVecs[mapIdx, pIdx] = (dClPlus-dClMinus)/(2*deltaP[pIdx])
-    
+
     # do the primary CMB component
     # note: most of this is copied from above.  
     #   Later I should consolidate the two versions into a function.
     if usePrimaryCMB:
-        dClVecsP = np.empty((nClsP, nCosParams, lmaxP-lminP+1))
+        nClsP = nMapsP*(nMapsP+1)/2
+        dClVecsP = np.empty((nClsP, self.nCosParams, lmaxP-lminP+1))
 
         for map1 in range(nMapsP):
             print 'starting primary CMB derivative set ',map1+1,' of ',nMapsP,'... '
@@ -662,19 +673,201 @@ class FisherMatrix:
 
 ################################################################################
     #Build Fisher matrix
-    self.Fij = self.makeFisher(self.lmin,self.lmax)
+    self.Fij = self.makeFisher(self.lmin)
     if usePrimaryCMB:
-        self.FijTE = self.makeFisher(self.lminP,self.lmaxP,TE=True)
+        self.FijTE = self.makeFisher(self.lminP,TE=True)
     print 'creation of Fisher Matrix complete!\n'
     # end of init function
-
 
 
 ################################################################################
 # other methods
 
+  def getCrossCls(self,paramList,myParams,myPk,lmin,lmax,nBins,tophatBins=True):
+    """
+        Purpose:
+            get the crossCls for kappa, galaxies
+        Inputs:
+            paramList: like FisherMatrix.paramList, but only contains parameter
+                names for those which are to be varied
+                Note: a list of length 1 will cause a differently shaped array 
+                to be returned
+            myParams: a list of lists of parameters like FisherMatrix.cosParams
+                This list must have the same length as paramList
+            myPk: a MatterPower object
 
-  def makeFisher(self,lmin,lmax,TE=False,verbose=False):
+            nBins: number of redshift bins being used (should be nMaps-1)
+            lmin,lmax: min,max ell value to use
+            tophatBins: set to True to use tophat-shaped, non-overlapping bins
+        Returns:
+            crossCls: numpy array of shape (nMaps,nMaps,nCosParams,lmax)
+              unless the lenth of paramList is 1, then shape will be 
+              (nMaps,nMaps,lmax)
+    """
+    nCosParams = paramList.__len__()
+    nMaps = nBins+1
+    
+    crossCls = np.zeros((nMaps,nMaps,nCosParams,lmax-lmin+1))
+    for cParamNum in range(nCosParams):
+        print 'calculating MatterPower and Window objects for ',\
+              paramList[cParamNum], ' derivative . . . '
+
+        myPks = cp.MatterPower(nz=self.nz,AccuracyBoost=self.AccuracyBoost,
+                               nonlinear=self.nonlinear,**myParams[cParamNum])
+        myWins = cp.Window(myPks,zmin=self.zmin,zmax=self.zmax,
+                           nBins=self.nBins,biasK=cp.ones,biasG=cp.byeBias,
+                           dndzMode=self.dndzMode,z0=self.z0,doNorm=self.doNorm,
+                           useWk=self.useWk,BPZ=self.BPZ,
+                           binSmooth=self.binSmooth,biasByBin=self.biasByBin)
+        
+        # save pars for use in primary CMB
+        # it would be nice to restore this functionality 
+        #  but global DE settings make this hard
+        #myParsUpper.append(myPksUpper.pars)
+        #myParsLower.append(myPksLower.pars)
+
+        for map1 in range(nMaps):
+          if map1==0:
+            cor1 = cp.Window.kappa
+          else:
+            cor1 = cp.Window.galaxies
+          for map2 in range(map1,nMaps):
+            print '  starting angular cross power spectrum ',map1,', ',map2,'... '
+            if map2==0:
+              cor2 = cp.Window.kappa
+            else:
+              cor2 = cp.Window.galaxies
+            # since nonoverlapping bins have zero correlation use this condition:
+            if map1==0 or map1==map2 or not tophatBins:
+              ells,Cls = cp.getCl(myPks,myWins,binNum1=map1,binNum2=map2,
+                                  cor1=cor1,cor2=cor2,lmin=lmin,lmax=lmax)
+              crossCls[map1,map2,cParamNum] = Cls
+              crossCls[map2,map1,cParamNum] = Cls #symmetric
+        
+        # ditch the MatterPower and Window objects - wait, isn't this automatic?
+        del myPks
+        del myWins
+
+    # reshape for unperterbed version
+    if nCosParams == 1:
+        crossCls = np.reshape(crossCls,(nMaps,nMaps,lmax-lmin+1))
+    return crossCls
+
+    
+
+  def getCrossClsP(self,paramList,myParams,myPk, nMaps=3,lmax=5000,lpa=5.0,
+                   AccuracyBoost=3,myClName='unlensed_scalar'):
+    """
+    Purpose:
+        get the crossCls for primary CMB: TT,TE,EE,BB
+    Inputs:
+        paramList: like FisherMatrix.paramList, but only contains parameter
+            names for those which are to be varied
+            Note: a list of length 1 will cause a differently shaped array 
+            to be returned
+        myParams: a list of lists of parameters like FisherMatrix.cosParams
+            This list must have the same length as paramList
+        myPk: a MatterPower object
+        
+        nMaps: number of maps.  Set to 3 for T,E,B; 2 for T,E
+        lmax: lmax for returned array.  lmin will be zero
+        lpa: lensing_power_accuracy setting
+        AccuracyBoost: accuracy setting
+        myClName: which type of power spectrum to get from CAMB
+    Returns:
+        crossCls: numpy array of shape (nMaps,nMaps,nCosParams,lmax)
+          unless the lenth of paramList is 1, then shape will be 
+            (nMaps,nMaps,lmax)
+          Note Cl arrays are all zero based (starting at L=0).
+          Note L=0,1 entries will be zero by default.
+          Units are microK^2
+    """
+    nCosParams = paramList.__len__()
+    
+    crossCls = np.zeros((nMaps,nMaps,nCosParams,lmax+1))
+    for paramNum in range(nCosParams):
+        print 'getting Cl power spectra for perturbed parameter ', \
+              paramList[paramNum]
+        # get pars
+        pars = cp.MatterPower.getPars(myPk,lmax=lmax+1,lpa=lpa,
+                                      AccuracyBoost=AccuracyBoost,
+                                      **myParams[paramNum])
+        #get the selected power spectra
+        results = camb.get_results(pars)
+        powers = results.get_cmb_power_spectra(pars, CMB_unit='muK')
+        myCl = powers[myClName]  #ummm... doing it this way probably creates all 6 spectra, then I throw away 5 of them.
+        
+        #store them
+        #The different CL are always in the order TT, EE, BB, TE 
+        #  (with BB=0 for unlensed scalar results).
+        crossCls[0,0,paramNum]  = myCl[:lmax+1,0] # TT
+        crossCls[0,1,paramNum]  = myCl[:lmax+1,3] # TE
+        crossCls[1,0,paramNum]  = myCl[:lmax+1,3] # ET
+        crossCls[1,1,paramNum]  = myCl[:lmax+1,1] # EE
+        if nMaps == 3:
+            crossCls[2,2,paramNum]  = myCl[:lmax+1,2] # BB
+        
+        # reshape for unperterbed version
+        if nCosParams == 1:
+            crossCls = np.reshape(crossCls,(nMaps,nMaps,lmax+1))
+    return crossCls
+    
+
+  def makeCovar(self,crossCls,noiseCls,lmin,lmax):
+    """
+    Purpose: make a covariance matrix
+    Inputs:
+        crossCls:
+        noiseCls:
+        lmin,lmax: The lowest,highest ell in crossCls and noiseCls
+    Returns: 
+        covar,invCov,ells,obsList
+    """
+    # start by finding sizes
+    nMaps = crossCls.shape[0]
+    nCls = nMaps*(nMaps+1)/2
+    
+    # create return objects
+    covar = np.zeros((nCls,nCls,lmax-lmin+1))
+    ells = np.arange(lmin,lmax+1)
+
+    # create obsList to contain base nMaps representation of data label
+    obsList = np.zeros(nCls)
+    
+    # no noise or noise?
+    # disable this, since python doesn't know how to compare an np.array to None
+    """
+    if noiseCls == None:
+        print 'no noise'
+        myCls = crossCls
+    else:
+    """
+    myCls = crossCls + noiseCls
+        
+    # fill out covar matrix
+    for map1 in range(nMaps):
+        print 'starting covariance set ',map1+1,' of ',nMaps,'... '
+        for map2 in range(map1, nMaps):
+            covIndex1 = map1*nMaps+map2-map1*(map1+1)/2     # shortens the array
+            obsList[covIndex1] = map1*nMaps+map2            # base nMaps representation
+            for map3 in range(nMaps):
+              for map4 in range(map3, nMaps):
+                covIndex2 = map3*nMaps+map4-map3*(map3+1)/2 # shortens the array
+                if covIndex1 <= covIndex2:
+                  covar[covIndex1,covIndex2] = ( \
+                    myCls[map1,map3]*myCls[map2,map4] + \
+                    myCls[map1,map4]*myCls[map2,map3] )/ \
+                    (2.*ells+1)
+                else:   # avoid double calculation
+                  covar[covIndex1,covIndex2] = covar[covIndex2,covIndex1]
+    
+    invCov = np.transpose(np.linalg.inv(np.transpose(covar)))
+
+    return covar,invCov,ells,obsList
+
+
+  #def makeFisher(self,lmin,lmax,TE=False,verbose=False):
+  def makeFisher(self,lmin,TE=False,verbose=False):
     """
       Purpose:
         multply vectorT,invcov,vector and add up
@@ -682,8 +875,9 @@ class FisherMatrix:
         self: a FisherMatrix object
         lmin: the lowest ell to include in the sum
           must be GE self.lmin
-        lmax: the highest ell to inlude in the sum
-          must be LE self.lmax
+        #Note: this version no longer has an lmax parameter.
+        #lmax: the highest ell to inlude in the sum
+        #  must be LE self.lmax
         TE: set to True to compute Fij for T,E instead of k,g
           Default: False
         verbose: set to True to have extra output
@@ -692,6 +886,7 @@ class FisherMatrix:
         a Fisher Matrix, dimensions self.nParams x self.nParams
     """
     if TE:
+      lmax = 5000 # lmax for E, not T
       if lmin < self.lminP or lmax > self.lmaxP:
         print 'makeFisher: bad lminP or lmaxP!'
         return 0
@@ -699,9 +894,10 @@ class FisherMatrix:
       selfLmax = self.lmaxP
       nParams = self.nCosParams
       invCov = self.invCovP
-      dClVecs = self.dClVecsP
+      dClVecs = self.dClVecsP.copy()
 
     else:
+      lmax = 2000 # lmax for k,g
       if lmin < self.lmin or lmax > self.lmax:
         print 'makeFisher: bad lmin or lmax!'
         return 0
@@ -709,7 +905,7 @@ class FisherMatrix:
       selfLmax = self.lmax
       nParams = self.nParams
       invCov = self.invCov
-      dClVecs = self.dClVecs
+      dClVecs = self.dClVecs.copy()
     
     if verbose:
       print 'building Fisher matrix from components...'
@@ -722,24 +918,48 @@ class FisherMatrix:
       dClVec_i = dClVecs[:,i,:] # shape (nCls,nElls)
       for j in range(nParams):
         dClVec_j = dClVecs[:,j,:] # shape (nCls,nElls)
+
+        # adjust lmax for TT case (not TE,EE)
+        if TE: 
+          #print 'adjusting lmax for TT... '
+          lmaxTT = 3000
+          # lmin should already be adjusted for by this point
+          dClVec_i[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
+          dClVec_j[0,lmaxTT-1:] = np.zeros(5000-lmaxTT)
+        
         # ugh.  don't like nested loops in Python... but easier to program...
         for ell in range(lmax-lmin+1):
-          
           ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
-          
           myCov = invCov[:,:,ellInd]
           fij = np.dot(dClVec_i[:,ellInd],np.dot(myCov,dClVec_j[:,ellInd]))
           Fij[i,j] += fij
-    return Fij
-    
 
+        # now the TT part above ell=3000
+        #if TE:
+        #  print 'removing TT part above ell=3000...'
+        #  lmin = 3001
+        #  lmax = 5000
+        #  for ell in range(lmax-lmin+1):
+        #    ellInd = ell+lmin-selfLmin # adjust ell to match indices in arrays
+        #    fij = dClVec_i[0,ellInd]*invCov[0,0,ellInd]*dClVec_j[0,ellInd]
+        #    #fij = dClVec_i[1,ellInd]*invCov[1,1,ellInd]*dClVec_j[1,ellInd]
+        #    Fij[i,j] -= fij
+
+
+    return Fij
+
+    
   def getBinCenters(self):
     """
       return array of centers of bins
     """
     if self.dndzMode == 1:
-      return (0.3,0.5,0.7,0.9,1.1)
+      #return (0.3,0.5,0.7,0.9,1.1)
+      binEdges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 
+                  2.3, 2.6, 3.0, 3.5, 4.0, 7.0]
+      return (np.array(binEdges[1:])+np.array(binEdges[:1]))/2
     elif self.dndzMode == 2:
+      print 'getting bin centers assuming beesBins == False...'
       halfBinWidth = (self.zmax-self.zmin)/(2*self.nBins)
       nHalfBins = (2*np.arange(self.nBins)+1)
       return halfBinWidth*nHalfBins+self.zmin
@@ -879,6 +1099,7 @@ class Fisher:
         aIndex: the index of the first parameter
         bIndex: the index of the second parameter
     """
+    """
     # fiducial values
     xFid = self.paramVals[aIndex]
     yFid = self.paramVals[bIndex]
@@ -894,7 +1115,8 @@ class Fisher:
     plt.ylim([yFid-limFac*dy,yFid+limFac*dy])
     #cl.finishup(xFid,yFid,xLabel,yLabel,c='k',dc='w',sh=0)
     plt.show()
-  
+    """
+    pass
 
 ################################################################################
 # plotting functions
@@ -1139,6 +1361,7 @@ def plotSigmasByBinSmooth(nz=1000,lmax=2000,nBins=8,z0=1.5,zmax=4.0,**cos_kwargs
   plt.show()
     
   return eigs, fidAs, fidBs, sigmaAs, sigmaBs
+
 
 
 ################################################################################
